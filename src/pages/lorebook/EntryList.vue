@@ -419,6 +419,15 @@ function handleExecuteBatchGroup() {
           <i class="fa-solid fa-list-check"></i>
         </button>
 
+        <!-- 操作历史与撤回 (近20条记录) -->
+        <button
+          class="icon-btn"
+          @click="showHistoryModal = true"
+          title="操作日志与撤回"
+        >
+          <i class="fa-solid fa-clock-rotate-left"></i>
+        </button>
+
         <!-- 更多世界书操作菜单 -->
         <div class="book-tools-dropdown-wrapper">
           <button
@@ -461,14 +470,6 @@ function handleExecuteBatchGroup() {
             >
               <i class="fa-solid fa-boxes-stacked"></i>
               <span>批量管理 (导入/删除)</span>
-            </button>
-
-            <button
-              class="book-tools-menu-item"
-              @click="showHistoryModal = true; showBookToolsMenu = false"
-            >
-              <i class="fa-solid fa-clock-rotate-left"></i>
-              <span>操作日志与撤回</span>
             </button>
 
             <button

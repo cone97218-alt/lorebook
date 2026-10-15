@@ -31,7 +31,7 @@ import {
   type WorldInfoActivationBatch,
 } from '@/api/activation';
 import { toast } from '@/st/toast';
-import { ui } from '@/state/ui';
+import { ui, onAppClose } from '@/state/ui';
 import { recordAction } from '@/state/history';
 
 export type { WorldBookSnapshot, SnapshotDiff } from '@/api/snapshots';
@@ -160,6 +160,13 @@ watch(
 );
 
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
+
+// 当用户关闭/收起拓展面板时，若有未保存的脏数据立即强制落盘并热同步至酒馆
+onAppClose(() => {
+  if (lorebookState.isDirty && !lorebookState.isSaving) {
+    void saveImmediately();
+  }
+});
 
 export const activeEntry = computed<WorldInfoEntry | null>(() => {
   if (!lorebookState.bookData || lorebookState.activeUid === null) return null;
@@ -471,6 +478,7 @@ export function addNewEntry(): WorldInfoEntry | null {
   lorebookState.activeUid = newUid;
   lorebookState.viewMode = 'editor';
   markDirty();
+  void saveImmediately();
   recordAction(`新建词条 [${entry.comment || '#' + newUid}]`, () => {
     if (!lorebookState.bookData?.entries[newUid]) return;
     delete lorebookState.bookData.entries[newUid];
@@ -479,6 +487,7 @@ export function addNewEntry(): WorldInfoEntry | null {
       lorebookState.activeUid = remaining.length > 0 ? remaining[0] : null;
     }
     markDirty();
+    void saveImmediately();
     toast(`已撤回新建词条 #${newUid}`, 'info');
   });
   return entry;
@@ -502,11 +511,13 @@ export function duplicateEntry(uid: number): WorldInfoEntry | null {
   lorebookState.bookData.entries[newUid] = cloned;
   lorebookState.activeUid = newUid;
   markDirty();
+  void saveImmediately();
   toast(`已成功复制词条副本 #${newUid}`, 'success');
   recordAction(`复制词条 [${src.comment || '#' + uid}] -> #${newUid}`, () => {
     if (!lorebookState.bookData?.entries[newUid]) return;
     delete lorebookState.bookData.entries[newUid];
     markDirty();
+    void saveImmediately();
     toast(`已撤回复制词条 #${newUid}`, 'info');
   });
   return cloned;
@@ -527,11 +538,13 @@ export function removeEntry(uid: number): void {
     lorebookState.activeUid = remaining.length > 0 ? remaining[0] : null;
   }
   markDirty();
+  void saveImmediately();
   toast(`已删除词条 #${uid}`, 'info');
   recordAction(`删除词条 [${backup.comment || '#' + uid}]`, () => {
     if (!lorebookState.bookData) return;
     lorebookState.bookData.entries[uid] = backup;
     markDirty();
+    void saveImmediately();
     toast(`已恢复词条 [${backup.comment || '#' + uid}]`, 'success');
   });
 }
@@ -557,12 +570,14 @@ export function setEntryStrategy(uid: number, strategy: 'green' | 'blue' | 'purp
     entry.vectorized = true;
   }
   markDirty();
-  const label = strategy === 'green' ? '绿灯 (按词触发)' : strategy === 'blue' ? '蓝灯 (常驻注入)' : '链接 (向量化)';
+  void saveImmediately();
+  const label = strategy === 'green' ? '绿灯' : strategy === 'blue' ? '蓝灯' : '链接';
   recordAction(`将词条 [${entry.comment || '#' + uid}] 策略改为 ${label}`, () => {
     if (!lorebookState.bookData?.entries[uid]) return;
     lorebookState.bookData.entries[uid].constant = prevConst;
     lorebookState.bookData.entries[uid].vectorized = prevVect;
     markDirty();
+    void saveImmediately();
     toast(`已撤回词条 [${entry.comment || '#' + uid}] 的策略变更`, 'info');
   });
 }
@@ -604,10 +619,12 @@ export function toggleEntryDisable(uid: number): void {
     const prev = entry.disable;
     entry.disable = !prev;
     markDirty();
+    void saveImmediately();
     recordAction(`${entry.disable ? '停用' : '启用'}词条 [${entry.comment || '#' + uid}]`, () => {
       if (!lorebookState.bookData?.entries[uid]) return;
       lorebookState.bookData.entries[uid].disable = prev;
       markDirty();
+      void saveImmediately();
       toast(`已撤回词条 [${entry.comment || '#' + uid}] 的启停状态`, 'info');
     });
   }
@@ -786,6 +803,7 @@ export function applyBookSnapshot(snapshot: WorldBookSnapshot): boolean {
   const changed = applySnapshot(snapshot, lorebookState.bookData);
   if (changed) {
     markDirty();
+    void saveImmediately();
     toast(`已还原快照《${snapshot.name}》`, 'success');
   } else {
     toast(`当前状态与快照《${snapshot.name}》完全一致`, 'info');
@@ -923,6 +941,7 @@ export function batchEnable(): void {
     }
   }
   markDirty();
+  void saveImmediately();
   toast(`已启用 ${count} 个条目`, 'success');
   recordAction(`批量启用 ${count} 个条目`, () => {
     if (!lorebookState.bookData) return;
@@ -931,6 +950,7 @@ export function batchEnable(): void {
       if (e) e.disable = disabled;
     }
     markDirty();
+    void saveImmediately();
     toast(`已撤回批量启用 (${count} 项)`, 'info');
   });
 }
@@ -950,6 +970,7 @@ export function batchDisable(): void {
     }
   }
   markDirty();
+  void saveImmediately();
   toast(`已停用 ${count} 个条目`, 'info');
   recordAction(`批量停用 ${count} 个条目`, () => {
     if (!lorebookState.bookData) return;
@@ -958,6 +979,7 @@ export function batchDisable(): void {
       if (e) e.disable = disabled;
     }
     markDirty();
+    void saveImmediately();
     toast(`已撤回批量停用 (${count} 项)`, 'info');
   });
 }
@@ -978,6 +1000,7 @@ export function batchDelete(): void {
   lorebookState.selectedUids = [];
   lorebookState.isBatchMode = false;
   markDirty();
+  void saveImmediately();
   toast(`已删除 ${count} 个条目`, 'info');
   recordAction(`批量删除 ${count} 个条目`, () => {
     if (!lorebookState.bookData) return;
@@ -985,6 +1008,7 @@ export function batchDelete(): void {
       lorebookState.bookData.entries[Number(uStr)] = entry;
     }
     markDirty();
+    void saveImmediately();
     toast(`已恢复批量删除的 ${count} 个条目`, 'success');
   });
 }

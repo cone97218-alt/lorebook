@@ -210,6 +210,24 @@ export function openApp(page?: string): void {
   lastOpenedAt = performance.now();
 }
 
+export type CloseAppHook = () => void;
+const closeAppHooks: CloseAppHook[] = [];
+
+export function onAppClose(hook: CloseAppHook): () => void {
+  closeAppHooks.push(hook);
+  return () => {
+    const idx = closeAppHooks.indexOf(hook);
+    if (idx !== -1) closeAppHooks.splice(idx, 1);
+  };
+}
+
 export function closeApp(): void {
+  for (const hook of closeAppHooks) {
+    try {
+      hook();
+    } catch {
+      /* ignore */
+    }
+  }
   ui.open = false;
 }
