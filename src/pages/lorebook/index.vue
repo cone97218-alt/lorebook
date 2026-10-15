@@ -5,7 +5,7 @@ import EntryList from './EntryList.vue';
 import EntryEditor from './EntryEditor.vue';
 
 onMounted(() => {
-  void loadWorldBooks();
+  void loadWorldBooks(true);
 });
 </script>
 

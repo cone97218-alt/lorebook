@@ -575,16 +575,14 @@ onDeactivated(() => {
             <i class="fa-solid fa-power-off"></i>
           </button>
 
-          <!-- 5. 保存按钮 -->
-          <button
-            class="icon-btn"
-            :class="{ 'btn-accent': lorebookState.isDirty }"
-            @click="handleSaveNow"
-            :disabled="lorebookState.isSaving"
-            title="保存"
+          <!-- 自动保存状态指示 (纯自动保存，无需手动按键) -->
+          <span
+            v-if="lorebookState.isSaving"
+            class="saving-indicator-icon"
+            title="自动保存同步中..."
           >
-            <i :class="lorebookState.isSaving ? 'fa-solid fa-circle-notch fa-spin' : 'fa-solid fa-floppy-disk'"></i>
-          </button>
+            <i class="fa-solid fa-circle-notch fa-spin"></i>
+          </span>
         </div>
       </header>
 
@@ -1070,6 +1068,16 @@ onDeactivated(() => {
   background: var(--myext-accent);
   color: var(--myext-accent-ink);
   border-color: var(--myext-accent);
+}
+
+.saving-indicator-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  color: var(--myext-accent);
+  font-size: 14px;
 }
 
 .icon-btn-ghost {

@@ -264,7 +264,15 @@ function handleExecuteDeleteEntry() {
 
 function handleDuplicate(uid: number, e: MouseEvent) {
   e.stopPropagation();
-  duplicateEntry(uid);
+  const cloned = duplicateEntry(uid);
+  if (cloned) {
+    nextTick(() => {
+      const el = document.querySelector(`[data-uid="${cloned.uid}"]`) as HTMLElement | null;
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    });
+  }
 }
 
 function handleTakeSnapshot() {
@@ -474,11 +482,11 @@ function handleExecuteBatchGroup() {
 
             <button
               class="book-tools-menu-item"
-              @click="loadWorldBooks(); showBookToolsMenu = false"
+              @click="loadWorldBooks(true); showBookToolsMenu = false"
               :class="{ spinning: lorebookState.isLoadingBooks }"
             >
               <i class="fa-solid fa-rotate-right"></i>
-              <span>刷新世界书列表</span>
+              <span>刷新世界书与词条数据</span>
             </button>
 
             <div v-if="lorebookState.currentBook" class="book-tools-menu-divider"></div>
@@ -604,6 +612,7 @@ function handleExecuteBatchGroup() {
           <div
             v-for="entry in filteredEntries"
             :key="entry.uid"
+            :data-uid="entry.uid"
             class="entry-card"
             :class="{
               active: lorebookState.activeUid === entry.uid,
@@ -777,6 +786,7 @@ function handleExecuteBatchGroup() {
               <div
                 v-for="entry in grp.entries"
                 :key="entry.uid"
+                :data-uid="entry.uid"
                 class="entry-card"
                 :class="{
                   active: lorebookState.activeUid === entry.uid,

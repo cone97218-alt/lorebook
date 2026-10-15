@@ -8,6 +8,7 @@ import { syncTopBarButton, initNativeWorldBookInterceptor } from '@/topbar';
 import { syncQuickReplyButton } from '@/quickReply';
 import { registerPublicInterface } from '@/public/register';
 import { ui } from '@/state/ui';
+import { lorebookState, selectWorldBook } from '@/state/lorebook';
 import { versionedAssetUrl } from '@/version';
 
 // 样式打包
@@ -110,6 +111,14 @@ function bindLifecycleEvents(): void {
 
   es.on(et.CHARACTER_MESSAGE_RENDERED, () => {
     console.log('[MyExtension] 角色消息已渲染');
+  });
+
+  es.on(et.WORLDINFO_UPDATED, (bookName: string) => {
+    if (bookName && lorebookState.currentBook === bookName) {
+      if (!lorebookState.isSaving && !lorebookState.isDirty) {
+        void selectWorldBook(bookName, true);
+      }
+    }
   });
 }
 

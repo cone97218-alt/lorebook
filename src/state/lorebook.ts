@@ -377,7 +377,7 @@ export function refreshBoundBooks(): void {
 /**
  * 加载世界书列表
  */
-export async function loadWorldBooks(): Promise<void> {
+export async function loadWorldBooks(forceReloadCurrent = false): Promise<void> {
   lorebookState.isLoadingBooks = true;
   refreshBoundBooks();
   try {
@@ -391,6 +391,8 @@ export async function loadWorldBooks(): Promise<void> {
       if (target) {
         await selectWorldBook(target);
       }
+    } else if (forceReloadCurrent && lorebookState.currentBook) {
+      await selectWorldBook(lorebookState.currentBook, true);
     }
   } finally {
     lorebookState.isLoadingBooks = false;
@@ -398,18 +400,20 @@ export async function loadWorldBooks(): Promise<void> {
 }
 
 /**
- * 切换选中的世界书
+ * 切换或重载选中的世界书
  */
-export async function selectWorldBook(name: string): Promise<void> {
+export async function selectWorldBook(name: string, keepActiveUid = false): Promise<void> {
   if (lorebookState.isDirty && lorebookState.currentBook) {
     await saveImmediately();
   }
 
+  const prevActiveUid = lorebookState.activeUid;
   lorebookState.currentBook = name;
   localStorage.setItem(LAST_BOOK_STORAGE_KEY, name);
   lorebookState.isLoadingData = true;
-  lorebookState.bookData = null;
-  lorebookState.activeUid = null;
+  if (!keepActiveUid) {
+    lorebookState.activeUid = null;
+  }
   lorebookState.isDirty = false;
   lorebookState.isBatchMode = false;
   lorebookState.selectedUids = [];
@@ -436,7 +440,9 @@ export async function selectWorldBook(name: string): Promise<void> {
     lorebookState.bookData = data;
     if (data) {
       const uids = Object.keys(data.entries).map(Number);
-      if (uids.length > 0) {
+      if (keepActiveUid && prevActiveUid !== null && uids.includes(prevActiveUid)) {
+        lorebookState.activeUid = prevActiveUid;
+      } else if (uids.length > 0) {
         lorebookState.activeUid = uids[0];
       }
     }
@@ -477,6 +483,15 @@ export function addNewEntry(): WorldInfoEntry | null {
   if (!lorebookState.bookData) return null;
   const newUid = getFreeUid(lorebookState.bookData);
   const entry = createEntryTemplate(newUid);
+
+  // 确保新词条所属分组被展开可见
+  const grp = (entry.group || '').trim() || '未分组';
+  lorebookState.expandedGroups[grp] = true;
+
+  // 清除搜索和过滤条件，防止新建词条被筛选器隐藏
+  lorebookState.searchQuery = '';
+  lorebookState.filterType = 'all';
+
   lorebookState.bookData.entries[newUid] = entry;
   lorebookState.activeUid = newUid;
   lorebookState.viewMode = 'editor';
@@ -510,6 +525,14 @@ export function duplicateEntry(uid: number): WorldInfoEntry | null {
     uid: newUid,
     comment: `${src.comment || '词条'}_副本`,
   };
+
+  // 确保副本所属分组展开可见
+  const grp = (cloned.group || '').trim() || '未分组';
+  lorebookState.expandedGroups[grp] = true;
+
+  // 清除搜索和过滤条件，防止复制后的词条被过滤隐藏
+  lorebookState.searchQuery = '';
+  lorebookState.filterType = 'all';
 
   lorebookState.bookData.entries[newUid] = cloned;
   lorebookState.activeUid = newUid;
