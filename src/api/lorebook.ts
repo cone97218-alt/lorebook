@@ -151,19 +151,24 @@ export async function saveWorldBookData(name: string, data: WorldInfoData): Prom
     const ctx = getContext();
     const hostWI = await getHostWorldInfo();
 
+    // 核心关键：将 Vue 3 的 Reactive Proxy 彻底转为纯净的 Plain JS Object
+    // 否则 SillyTavern 的 StructuredCloneMap.get(key) 会触发 structuredClone(Proxy)
+    // 从而抛出 DataCloneError: #<Object> could not be cloned，导致酒馆原生编辑器与内存缓存严重崩溃失效
+    const cleanData: WorldInfoData = JSON.parse(JSON.stringify(data));
+
     let saved = false;
 
     // 1. 优先调用宿主原生 saveWorldInfo，确保 SillyTavern 的 in-memory worldInfoCache 立即更新
     if (typeof hostWI?.saveWorldInfo === 'function') {
       try {
-        await hostWI.saveWorldInfo(name, data, true);
+        await hostWI.saveWorldInfo(name, cleanData, true);
         saved = true;
       } catch (err) {
         console.warn('[Lorebook] hostWI.saveWorldInfo failed, falling back', err);
       }
     } else if (typeof ctx?.saveWorldInfo === 'function') {
       try {
-        await ctx.saveWorldInfo(name, data, true);
+        await ctx.saveWorldInfo(name, cleanData, true);
         saved = true;
       } catch (err) {
         console.warn('[Lorebook] ctx.saveWorldInfo call failed, falling back to fetch', err);
@@ -174,17 +179,18 @@ export async function saveWorldBookData(name: string, data: WorldInfoData): Prom
       const res = await fetch('/api/worldinfo/edit', {
         method: 'POST',
         headers: getHeaders(),
-        body: JSON.stringify({ name, data }),
+        body: JSON.stringify({ name, data: cleanData }),
       });
       if (!res.ok) return false;
+    }
 
-      // 兜底同步酒馆原生内存缓存
-      if (hostWI?.worldInfoCache?.set) {
-        try {
-          hostWI.worldInfoCache.set(name, data);
-        } catch {
-          /* ignore */
-        }
+    // 无论走哪条分支，都确保宿主 worldInfoCache 中存储的是纯净的 cleanData
+    if (hostWI?.worldInfoCache?.set) {
+      try {
+        hostWI.worldInfoCache.delete?.(name);
+        hostWI.worldInfoCache.set(name, cleanData);
+      } catch {
+        /* ignore */
       }
     }
 
@@ -233,7 +239,7 @@ export async function saveWorldBookData(name: string, data: WorldInfoData): Prom
     const eventTypes = hostWI?.event_types ?? ctx?.eventTypes;
     if (eventEmitter?.emit) {
       const eventName = eventTypes?.WORLDINFO_UPDATED || 'worldinfo_updated';
-      void eventEmitter.emit(eventName, name, data);
+      void eventEmitter.emit(eventName, name, cleanData);
     }
     return true;
   } catch (err) {

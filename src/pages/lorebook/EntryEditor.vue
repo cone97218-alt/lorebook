@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, computed, onMounted, onUnmounted, nextTick } from 'vue';
+import { ref, watch, computed, onMounted, onUnmounted, onDeactivated, nextTick } from 'vue';
 import {
   lorebookState,
   activeEntry,
@@ -491,6 +491,15 @@ function handleTouchEnd(e: TouchEvent) {
 
 onUnmounted(() => {
   if (statsTimer) clearTimeout(statsTimer);
+  if (lorebookState.isDirty && !lorebookState.isSaving) {
+    void saveImmediately();
+  }
+});
+
+onDeactivated(() => {
+  if (lorebookState.isDirty && !lorebookState.isSaving) {
+    void saveImmediately();
+  }
 });
 </script>
 

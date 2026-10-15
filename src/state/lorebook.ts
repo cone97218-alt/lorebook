@@ -457,6 +457,9 @@ export function openEntry(uid: number): void {
  * 关闭编辑器（返回列表）
  */
 export function closeEditor(): void {
+  if (lorebookState.isDirty && !lorebookState.isSaving) {
+    void saveImmediately();
+  }
   lorebookState.viewMode = 'list';
 }
 
