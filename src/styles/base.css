@@ -1,0 +1,271 @@
+/* 样式全部收敛在 Shadow DOM 的 .myext-root 下，隔离全局 */
+
+:host {
+  all: initial;
+  font-family: inherit;
+}
+
+.myext-root,
+.myext-root * {
+  box-sizing: border-box;
+}
+
+.myext-root {
+  font-family: var(--myext-font-sans);
+  font-size: 14px;
+  color: var(--myext-ink);
+  line-height: 1.6;
+}
+
+/* 遮罩通用基底 */
+.myext-overlay {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 100vh;
+  height: 100dvh;
+  z-index: 10000;
+  display: flex;
+  background: var(--myext-overlay);
+  backdrop-filter: blur(8px);
+}
+
+/* 1. 居中弹窗 (Center) */
+.myext-overlay.overlay-pos-center {
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+.myext-window.pos-center {
+  border-radius: var(--myext-radius-win);
+  width: 100%;
+  max-width: var(--myext-win-max-w);
+}
+.myext-window.pos-center.h-compact { height: 55vh; }
+.myext-window.pos-center.h-medium { height: 75vh; }
+.myext-window.pos-center.h-large { height: 90vh; }
+.myext-window.pos-center.h-full { height: 98vh; width: 98vw; }
+
+/* 2. 底部抽屉 (Bottom Sheet) */
+.myext-overlay.overlay-pos-bottom {
+  align-items: flex-end;
+  justify-content: center;
+  padding: 0;
+}
+.myext-window.pos-bottom {
+  border-radius: 20px 20px 0 0;
+  width: 100vw;
+  max-width: 100vw;
+  border-bottom: none;
+}
+.myext-window.pos-bottom.h-compact { height: 50vh; }
+.myext-window.pos-bottom.h-medium { height: 72vh; }
+.myext-window.pos-bottom.h-large { height: 88vh; }
+.myext-window.pos-bottom.h-full { height: 100vh; height: 100dvh; }
+
+/* 3. 顶部滑出 (Top Sheet) */
+.myext-overlay.overlay-pos-top {
+  align-items: flex-start;
+  justify-content: center;
+  padding: 0;
+}
+.myext-window.pos-top {
+  border-radius: 0 0 20px 20px;
+  width: 100vw;
+  max-width: 100vw;
+  border-top: none;
+}
+.myext-window.pos-top.h-compact { height: 50vh; }
+.myext-window.pos-top.h-medium { height: 72vh; }
+.myext-window.pos-top.h-large { height: 88vh; }
+.myext-window.pos-top.h-full { height: 100vh; height: 100dvh; }
+
+/* 4. 全屏模式 (Fullscreen) */
+.myext-overlay.overlay-pos-fullscreen {
+  padding: 0;
+}
+.myext-window.pos-fullscreen {
+  width: 100vw;
+  max-width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  max-height: 100dvh;
+  border-radius: 0;
+  border: none;
+}
+
+/* 主窗口外壳基础 */
+.myext-window {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  background: var(--myext-bg);
+  border: 1px solid var(--myext-line);
+  box-shadow: var(--myext-shadow);
+  overflow: hidden;
+  will-change: transform;
+}
+
+@media (max-width: 640px) {
+  .myext-overlay.overlay-pos-center {
+    padding: 12px;
+  }
+  .myext-window.pos-center {
+    width: 100%;
+    max-width: 100%;
+  }
+  .myext-window.pos-center.h-full {
+    height: 100vh;
+    height: 100dvh;
+    border-radius: 0;
+    border: none;
+  }
+}
+
+/* 顶栏 */
+.myext-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 18px;
+  background: var(--myext-surface);
+  border-bottom: 1px solid var(--myext-line);
+  flex-shrink: 0;
+}
+
+.myext-head-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--myext-ink);
+}
+
+.myext-nav {
+  display: flex;
+  gap: 8px;
+}
+
+.myext-nav-item {
+  padding: 6px 12px;
+  border-radius: var(--myext-radius-sm);
+  background: transparent;
+  border: none;
+  color: var(--myext-ink-soft);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.myext-nav-item.active {
+  background: var(--myext-surface-2);
+  color: var(--myext-accent);
+  font-weight: 600;
+}
+
+/* 内容区 */
+.myext-body {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+/* 按钮与通用原子 */
+.myext-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: var(--myext-radius-sm);
+  border: 1px solid var(--myext-line-strong);
+  background: var(--myext-surface);
+  color: var(--myext-ink);
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.15s;
+}
+
+.myext-btn:hover {
+  background: var(--myext-surface-2);
+}
+
+.myext-btn-primary {
+  background: var(--myext-accent);
+  border-color: var(--myext-accent);
+  color: var(--myext-accent-ink);
+}
+
+.myext-btn-primary:hover {
+  opacity: 0.9;
+}
+
+/* 弹窗遮罩外壳 */
+.myext-modal-mask {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 10001;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.5);
+  padding: 16px;
+}
+
+/* 过渡动画 */
+.myext-fade-enter-active,
+.myext-fade-leave-active {
+  transition: opacity 0.2s ease;
+}
+
+.myext-fade-enter-from,
+.myext-fade-leave-to {
+  opacity: 0;
+}
+
+.myext-modal-enter-active,
+.myext-modal-leave-active {
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.myext-modal-enter-from,
+.myext-modal-leave-to {
+  opacity: 0;
+  transform: scale(0.96);
+}
+
+/* 移动端安全区域与软键盘可达性 (对齐 TauriTavern Layout Contract) */
+.myext-window {
+  padding-top: var(--tt-inset-top, env(safe-area-inset-top, 0px));
+  padding-left: var(--tt-inset-left, env(safe-area-inset-left, 0px));
+  padding-right: var(--tt-inset-right, env(safe-area-inset-right, 0px));
+}
+
+.entries-scroll-area,
+.editor-main,
+.groups-view-container,
+.snapshots-view-container {
+  scroll-padding-bottom: max(
+    calc(var(--tt-viewport-bottom-inset, var(--tt-inset-bottom, 0px)) - var(--tt-inset-bottom, 0px)),
+    16px
+  );
+}
+
+.entries-scroll-area::after,
+.editor-main::after {
+  content: '';
+  display: block;
+  height: max(var(--tt-viewport-bottom-inset, var(--tt-inset-bottom, 0px)), 0px);
+  pointer-events: none;
+  flex-shrink: 0;
+}

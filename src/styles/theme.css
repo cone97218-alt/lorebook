@@ -1,0 +1,189 @@
+/* Design Tokens: 极致精美的现代极简配色体系 (全线莫兰迪色系与酒馆自适应) */
+
+.myext-root {
+  --myext-font-sans: inherit;
+  --myext-font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+  --myext-radius-win: 18px;
+  --myext-radius: 12px;
+  --myext-radius-sm: 8px;
+
+  --myext-win-max-w: 1200px;
+}
+
+/* ================= 1. 莫兰迪·静谧雾灰 (Muted Slate - 默认高级暗灰) ================= */
+.myext-root[data-theme='obsidian'] {
+  --myext-bg: #15181c;
+  --myext-surface: #1e2227;
+  --myext-surface-2: #272c33;
+  --myext-ink: #e6e9ed;
+  --myext-ink-soft: #9ba3af;
+  --myext-ink-muted: #68717d;
+  --myext-accent: #6b8ca8;
+  --myext-accent-ink: #ffffff;
+  --myext-line: rgba(255, 255, 255, 0.08);
+  --myext-line-strong: rgba(255, 255, 255, 0.15);
+  --myext-overlay: rgba(0, 0, 0, 0.68);
+  --myext-shadow: 0 16px 40px -8px rgba(0, 0, 0, 0.55);
+}
+
+/* ================= 2. 莫兰迪·青苔橄榄 (Sage Moss - 沉浸夜暮灰绿) ================= */
+.myext-root[data-theme='midnight'] {
+  --myext-bg: #141815;
+  --myext-surface: #1c211d;
+  --myext-surface-2: #252b27;
+  --myext-ink: #e5eae6;
+  --myext-ink-soft: #99a79d;
+  --myext-ink-muted: #627066;
+  --myext-accent: #6e9681;
+  --myext-accent-ink: #ffffff;
+  --myext-line: rgba(255, 255, 255, 0.08);
+  --myext-line-strong: rgba(255, 255, 255, 0.15);
+  --myext-overlay: rgba(0, 0, 0, 0.68);
+  --myext-shadow: 0 16px 40px -8px rgba(0, 0, 0, 0.55);
+}
+
+/* ================= 3. 莫兰迪·烟熏陶土 (Dusty Terracotta - 复古温润羊皮纸调) ================= */
+.myext-root[data-theme='sepia'] {
+  --myext-bg: #1a1715;
+  --myext-surface: #24201c;
+  --myext-surface-2: #302a25;
+  --myext-ink: #eae4de;
+  --myext-ink-soft: #ab9f93;
+  --myext-ink-muted: #73685e;
+  --myext-accent: #b88a76;
+  --myext-accent-ink: #ffffff;
+  --myext-line: rgba(255, 255, 255, 0.08);
+  --myext-line-strong: rgba(255, 255, 255, 0.15);
+  --myext-overlay: rgba(0, 0, 0, 0.68);
+  --myext-shadow: 0 16px 40px -8px rgba(0, 0, 0, 0.55);
+}
+
+/* ================= 4. 莫兰迪·丁香暮紫 (Smoky Lilac - 优雅淡雅灰紫) ================= */
+.myext-root[data-theme='slate'] {
+  --myext-bg: #17151a;
+  --myext-surface: #211e26;
+  --myext-surface-2: #2b2732;
+  --myext-ink: #ebe6ee;
+  --myext-ink-soft: #a79dae;
+  --myext-ink-muted: #6f6675;
+  --myext-accent: #95819e;
+  --myext-accent-ink: #ffffff;
+  --myext-line: rgba(255, 255, 255, 0.08);
+  --myext-line-strong: rgba(255, 255, 255, 0.15);
+  --myext-overlay: rgba(0, 0, 0, 0.68);
+  --myext-shadow: 0 16px 40px -8px rgba(0, 0, 0, 0.55);
+}
+
+/* ================= 5. 莫兰迪·燕麦暖白 (Oatmeal Sand - 极简温润浅色) ================= */
+.myext-root[data-theme='pearl'] {
+  --myext-bg: #f3f1ee;
+  --myext-surface: #e7e4df;
+  --myext-surface-2: #dbd8d2;
+  --myext-ink: #2d3133;
+  --myext-ink-soft: #636b6f;
+  --myext-ink-muted: #8e979c;
+  --myext-accent: #5c7365;
+  --myext-accent-ink: #ffffff;
+  --myext-line: rgba(0, 0, 0, 0.09);
+  --myext-line-strong: rgba(0, 0, 0, 0.18);
+  --myext-overlay: rgba(45, 49, 51, 0.35);
+  --myext-shadow: 0 16px 40px -8px rgba(0, 0, 0, 0.12);
+}
+
+/* ================= 5.1 莫兰迪·冰雾奶灰 (Cool Milk - 冷白清雅) ================= */
+.myext-root[data-theme='cloud_milk'] {
+  --myext-bg: #f4f6f8;
+  --myext-surface: #e8ecf1;
+  --myext-surface-2: #dce1e8;
+  --myext-ink: #2b313a;
+  --myext-ink-soft: #5e6875;
+  --myext-ink-muted: #8c97a5;
+  --myext-accent: #557999;
+  --myext-accent-ink: #ffffff;
+  --myext-line: rgba(0, 0, 0, 0.08);
+  --myext-line-strong: rgba(0, 0, 0, 0.16);
+  --myext-overlay: rgba(43, 49, 58, 0.35);
+  --myext-shadow: 0 16px 40px -8px rgba(0, 0, 0, 0.1);
+}
+
+/* ================= 5.2 莫兰迪·抹茶杏仁 (Matcha Sand - 柔和草本米绿) ================= */
+.myext-root[data-theme='matcha_sand'] {
+  --myext-bg: #f1f4f0;
+  --myext-surface: #e3eae1;
+  --myext-surface-2: #d5ded3;
+  --myext-ink: #27332b;
+  --myext-ink-soft: #56685c;
+  --myext-ink-muted: #839689;
+  --myext-accent: #4d7a5b;
+  --myext-accent-ink: #ffffff;
+  --myext-line: rgba(0, 0, 0, 0.08);
+  --myext-line-strong: rgba(0, 0, 0, 0.16);
+  --myext-overlay: rgba(39, 51, 43, 0.35);
+  --myext-shadow: 0 16px 40px -8px rgba(0, 0, 0, 0.1);
+}
+
+/* ================= 5.3 莫兰迪·暮云暖粉 (Sunset Blush - 柔和烟粉赤陶) ================= */
+.myext-root[data-theme='sunset_blush'] {
+  --myext-bg: #f6f2f0;
+  --myext-surface: #ebe3e0;
+  --myext-surface-2: #ded4cf;
+  --myext-ink: #3b2c28;
+  --myext-ink-soft: #725953;
+  --myext-ink-muted: #9e857e;
+  --myext-accent: #9c6356;
+  --myext-accent-ink: #ffffff;
+  --myext-line: rgba(0, 0, 0, 0.08);
+  --myext-line-strong: rgba(0, 0, 0, 0.16);
+  --myext-overlay: rgba(59, 44, 40, 0.35);
+  --myext-shadow: 0 16px 40px -8px rgba(0, 0, 0, 0.1);
+}
+
+/* ================= 5.4 莫兰迪·海盐天青 (Pale Marine - 晨雾海盐淡青) ================= */
+.myext-root[data-theme='pale_marine'] {
+  --myext-bg: #f0f4f5;
+  --myext-surface: #e1eaec;
+  --myext-surface-2: #d2dee1;
+  --myext-ink: #253337;
+  --myext-ink-soft: #52676d;
+  --myext-ink-muted: #7f959c;
+  --myext-accent: #477782;
+  --myext-accent-ink: #ffffff;
+  --myext-line: rgba(0, 0, 0, 0.08);
+  --myext-line-strong: rgba(0, 0, 0, 0.16);
+  --myext-overlay: rgba(37, 51, 55, 0.35);
+  --myext-shadow: 0 16px 40px -8px rgba(0, 0, 0, 0.1);
+}
+
+/* ================= 6. 酒馆自适应 (ST Adaptive - 基于原生变量深度混色) ================= */
+.myext-root[data-theme='st'] {
+  /* 背景：取酒馆原生主背景 */
+  --myext-bg: var(--SmartThemeBlurTintColor, #13151b);
+
+  /* 主表面卡片：背景与文字柔和混色生成高质感卡片底色 */
+  --myext-surface: color-mix(in srgb, var(--SmartThemeBlurTintColor, #13151b) 88%, var(--SmartThemeBodyColor, #ffffff) 12%);
+
+  /* 次级表面/输入框/按钮：稍亮的交互底色 */
+  --myext-surface-2: color-mix(in srgb, var(--SmartThemeBlurTintColor, #13151b) 78%, var(--SmartThemeBodyColor, #ffffff) 22%);
+
+  /* 主文字：严格绑定酒馆原生正文文字颜色 */
+  --myext-ink: var(--SmartThemeBodyColor, #e2e8f0);
+
+  /* 次级文字：严格绑定酒馆原生强调/斜体文字色 */
+  --myext-ink-soft: var(--SmartThemeEmColor, #94a3b8);
+
+  /* 提示弱化文字 */
+  --myext-ink-muted: color-mix(in srgb, var(--SmartThemeEmColor, #94a3b8) 65%, transparent);
+
+  /* 重点高亮强调色：取酒馆原生高亮/引用对话色 */
+  --myext-accent: var(--SmartThemeQuoteColor, var(--SmartThemeHighlightColor, #3b82f6));
+  --myext-accent-ink: #ffffff;
+
+  /* 分割线与边框：严格采用酒馆原生边框色 */
+  --myext-line: var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.12));
+  --myext-line-strong: color-mix(in srgb, var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.2)) 70%, var(--SmartThemeBodyColor, #fff) 30%);
+
+  /* 阴影与遮罩 */
+  --myext-shadow: 0 20px 48px -8px var(--SmartThemeShadowColor, rgba(0, 0, 0, 0.55));
+  --myext-overlay: rgba(0, 0, 0, 0.65);
+}
