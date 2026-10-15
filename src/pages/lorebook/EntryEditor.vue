@@ -64,15 +64,33 @@ const existingGroups = computed(() => {
 const charCount = ref(0);
 const estTokenCount = ref(0);
 let statsTimer: ReturnType<typeof setTimeout> | null = null;
+let contentSyncTimer: ReturnType<typeof setTimeout> | null = null;
+
+function flushContentSync() {
+  if (contentSyncTimer) {
+    clearTimeout(contentSyncTimer);
+    contentSyncTimer = null;
+  }
+  if (contentTextarea.value && activeEntry.value) {
+    if (activeEntry.value.content !== contentTextarea.value.value) {
+      activeEntry.value.content = contentTextarea.value.value;
+      markDirty();
+    }
+  }
+}
 
 function updateStatsAsync(text: string) {
   if (statsTimer) clearTimeout(statsTimer);
   statsTimer = setTimeout(() => {
     charCount.value = text.length;
-    const cjk = (text.match(/[\u4e00-\u9fa5]/g) || []).length;
+    let cjk = 0;
+    for (let i = 0; i < text.length; i++) {
+      const code = text.charCodeAt(i);
+      if (code >= 0x4e00 && code <= 0x9fa5) cjk++;
+    }
     const nonCjk = text.length - cjk;
     estTokenCount.value = Math.ceil(cjk * 0.8 + nonCjk * 0.25);
-  }, 120);
+  }, 250);
 }
 
 watch(
@@ -81,14 +99,21 @@ watch(
   { immediate: true },
 );
 
-// 输入正文
+// 输入正文：停笔 250ms 后同步进响应式状态，避免高频击键触发全局计算属性重算
 function onContentInput(e: Event) {
   const target = e.target as HTMLTextAreaElement;
-  if (activeEntry.value) {
-    activeEntry.value.content = target.value;
-    markDirty();
-    updateStatsAsync(target.value);
-  }
+  if (!activeEntry.value) return;
+
+  if (contentSyncTimer) clearTimeout(contentSyncTimer);
+  contentSyncTimer = setTimeout(() => {
+    if (activeEntry.value) {
+      activeEntry.value.content = target.value;
+      markDirty();
+    }
+    contentSyncTimer = null;
+  }, 250);
+
+  updateStatsAsync(target.value);
 }
 
 function isBracketPair(s: string): boolean {
@@ -395,9 +420,10 @@ function escapeHtml(str: string): string {
 }
 
 const highlightedHtml = computed(() => {
+  if (!showSearch.value) return '';
   const text = activeEntry.value?.content || '';
   const q = searchQuery.value;
-  if (!showSearch.value || !q || searchMatches.value.length === 0) {
+  if (!q || searchMatches.value.length === 0) {
     return escapeHtml(text) + '\n';
   }
 
@@ -423,7 +449,7 @@ const highlightedHtml = computed(() => {
 });
 
 function syncScroll() {
-  if (contentTextarea.value && backdropRef.value) {
+  if (showSearch.value && contentTextarea.value && backdropRef.value) {
     backdropRef.value.scrollTop = contentTextarea.value.scrollTop;
     backdropRef.value.scrollLeft = contentTextarea.value.scrollLeft;
   }
@@ -489,14 +515,21 @@ function handleTouchEnd(e: TouchEvent) {
   }
 }
 
+function onTextareaBlur() {
+  flushContentSync();
+  handleBlurSave();
+}
+
 onUnmounted(() => {
   if (statsTimer) clearTimeout(statsTimer);
+  flushContentSync();
   if (lorebookState.isDirty && !lorebookState.isSaving) {
     void saveImmediately();
   }
 });
 
 onDeactivated(() => {
+  flushContentSync();
   if (lorebookState.isDirty && !lorebookState.isSaving) {
     void saveImmediately();
   }
@@ -734,6 +767,7 @@ onDeactivated(() => {
       <!-- 核心正文编辑区（带同步背景高亮层） -->
       <main class="editor-main" :class="[`font-size-${ui.fontSize}`, `font-family-${ui.fontFamily}`]">
         <div
+          v-if="showSearch"
           ref="backdropRef"
           class="content-backdrop"
           aria-hidden="true"
@@ -744,7 +778,7 @@ onDeactivated(() => {
           :value="activeEntry.content"
           @input="onContentInput"
           @scroll="syncScroll"
-          @blur="handleBlurSave"
+          @blur="onTextareaBlur"
           @keydown="handleTextareaKeydown"
           placeholder="..."
           class="content-textarea"
@@ -1248,6 +1282,8 @@ onDeactivated(() => {
   color: var(--myext-ink);
   resize: none;
   z-index: 2;
+  -webkit-overflow-scrolling: touch;
+  transform: translateZ(0);
 }
 
 /* 高亮标注样式 (柔和莫兰迪黄底色与当前选中的柔绿高亮) */

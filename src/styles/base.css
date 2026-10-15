@@ -30,7 +30,13 @@
   z-index: 10000;
   display: flex;
   background: var(--myext-overlay);
-  backdrop-filter: blur(8px);
+}
+
+@media (min-width: 641px) {
+  .myext-overlay {
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+  }
 }
 
 /* 1. 居中弹窗 (Center) */

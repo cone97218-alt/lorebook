@@ -316,7 +316,7 @@ export const entryGroups = computed<EntryGroup[]>(() => {
  * 世界书数据与趣味统计
  */
 export const bookStats = computed(() => {
-  if (!lorebookState.bookData) {
+  if (lorebookState.activeTab !== 'monitor' || !lorebookState.bookData) {
     return {
       totalEntries: 0,
       activeEntries: 0,

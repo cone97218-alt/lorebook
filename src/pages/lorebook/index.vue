@@ -11,7 +11,7 @@ onMounted(() => {
 
 <template>
   <div class="lorebook-page">
-    <Transition name="page-slide" mode="out-in">
+    <Transition name="page-fade">
       <KeepAlive>
         <component :is="lorebookState.viewMode === 'list' ? EntryList : EntryEditor" :key="lorebookState.viewMode" />
       </KeepAlive>
@@ -36,19 +36,14 @@ onMounted(() => {
   flex-direction: column;
 }
 
-/* 移动端页面无缝滑动转场 */
-.page-slide-enter-active,
-.page-slide-leave-active {
-  transition: opacity 0.15s ease, transform 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+/* 移动端极速无感切换 */
+.page-fade-enter-active,
+.page-fade-leave-active {
+  transition: opacity 0.1s ease;
 }
 
-.page-slide-enter-from {
+.page-fade-enter-from,
+.page-fade-leave-to {
   opacity: 0;
-  transform: translateX(20px);
-}
-
-.page-slide-leave-to {
-  opacity: 0;
-  transform: translateX(-20px);
 }
 </style>

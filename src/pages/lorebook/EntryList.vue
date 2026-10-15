@@ -86,10 +86,15 @@ const batchFileInput = ref<HTMLInputElement | null>(null);
 
 // 记忆滚动位置
 const entriesScrollArea = ref<HTMLElement | null>(null);
+let scrollThrottleTimer: ReturnType<typeof setTimeout> | null = null;
 
 function onScroll(e: Event) {
   const el = e.target as HTMLElement;
-  lorebookState.savedScrollTop = el.scrollTop;
+  if (scrollThrottleTimer) return;
+  scrollThrottleTimer = setTimeout(() => {
+    lorebookState.savedScrollTop = el.scrollTop;
+    scrollThrottleTimer = null;
+  }, 150);
 }
 
 function restoreScroll() {
@@ -109,6 +114,10 @@ onActivated(() => {
 });
 
 onBeforeUnmount(() => {
+  if (scrollThrottleTimer) {
+    clearTimeout(scrollThrottleTimer);
+    scrollThrottleTimer = null;
+  }
   if (entriesScrollArea.value) {
     lorebookState.savedScrollTop = entriesScrollArea.value.scrollTop;
   }
@@ -2061,6 +2070,8 @@ function handleExecuteBatchGroup() {
   overflow-y: auto;
   padding: 10px 12px 90px;
   -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+  transform: translateZ(0);
 }
 
 .entries-list {
@@ -2078,12 +2089,17 @@ function handleExecuteBatchGroup() {
   border: 1px solid var(--myext-line);
   border-radius: var(--myext-radius);
   cursor: pointer;
-  transition: all 0.15s;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+  contain: layout style paint;
+  content-visibility: auto;
+  contain-intrinsic-size: 0 76px;
 }
 
-.entry-card:active {
-  background: var(--myext-surface-2);
-  transform: scale(0.99);
+@media (hover: hover) {
+  .entry-card:active {
+    background: var(--myext-surface-2);
+    transform: scale(0.99);
+  }
 }
 
 .entry-card.disabled {
@@ -2425,6 +2441,9 @@ function handleExecuteBatchGroup() {
   border: 1px solid var(--myext-line);
   border-radius: var(--myext-radius);
   overflow: hidden;
+  contain: layout style;
+  content-visibility: auto;
+  contain-intrinsic-size: 0 54px;
 }
 
 .group-header-row {
@@ -3020,7 +3039,13 @@ function handleExecuteBatchGroup() {
   justify-content: center;
   padding: 16px;
   z-index: 200;
-  backdrop-filter: blur(4px);
+}
+
+@media (min-width: 641px) {
+  .modal-inline-mask {
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+  }
 }
 
 .modal-box {
