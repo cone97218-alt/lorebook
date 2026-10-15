@@ -54,6 +54,7 @@ const newBookName = ref('');
 const showRenameBookModal = ref(false);
 const renameBookName = ref('');
 const showDeleteBookModal = ref(false);
+const showBookToolsMenu = ref(false);
 const entryToDelete = ref<number | null>(null);
 
 const showBatchDeleteModal = ref(false);
@@ -407,43 +408,6 @@ function handleExecuteBatchGroup() {
           </select>
         </div>
 
-        <!-- 批量管理世界书 (批量删除与批量导入) -->
-        <button
-          class="icon-btn"
-          @click="openBatchBookModal"
-          title="批量管理世界书 (删除/导入)"
-        >
-          <i class="fa-solid fa-boxes-stacked"></i>
-        </button>
-
-        <!-- 操作历史与撤回 (近20条记录) -->
-        <button
-          class="icon-btn"
-          @click="showHistoryModal = true"
-          title="操作日志与撤回"
-        >
-          <i class="fa-solid fa-clock-rotate-left"></i>
-        </button>
-
-        <!-- 新建世界书 -->
-        <button
-          class="icon-btn"
-          @click="showNewBookModal = true"
-          title="新建世界书"
-        >
-          <i class="fa-solid fa-folder-plus"></i>
-        </button>
-
-        <!-- 重命名世界书 -->
-        <button
-          v-if="lorebookState.currentBook"
-          class="icon-btn"
-          @click="openRenameModal"
-          title="重命名世界书"
-        >
-          <i class="fa-solid fa-pen-to-square"></i>
-        </button>
-
         <!-- 批量整理条目模式开关 -->
         <button
           v-if="lorebookState.currentBook"
@@ -455,25 +419,79 @@ function handleExecuteBatchGroup() {
           <i class="fa-solid fa-list-check"></i>
         </button>
 
-        <!-- 刷新列表 -->
-        <button
-          class="icon-btn"
-          @click="loadWorldBooks"
-          :class="{ spinning: lorebookState.isLoadingBooks }"
-          title="刷新世界书列表"
-        >
-          <i class="fa-solid fa-rotate-right"></i>
-        </button>
+        <!-- 更多世界书操作菜单 -->
+        <div class="book-tools-dropdown-wrapper">
+          <button
+            class="icon-btn"
+            :class="{ active: showBookToolsMenu }"
+            @click="showBookToolsMenu = !showBookToolsMenu"
+            title="世界书操作菜单"
+          >
+            <i class="fa-solid fa-ellipsis-vertical"></i>
+          </button>
 
-        <!-- 删除世界书 -->
-        <button
-          v-if="lorebookState.currentBook"
-          class="icon-btn danger-icon"
-          @click="showDeleteBookModal = true"
-          title="删除当前世界书"
-        >
-          <i class="fa-solid fa-trash-can"></i>
-        </button>
+          <!-- 点击外部关闭遮罩 -->
+          <div
+            v-if="showBookToolsMenu"
+            class="book-tools-menu-backdrop"
+            @click="showBookToolsMenu = false"
+          ></div>
+
+          <div v-if="showBookToolsMenu" class="book-tools-menu">
+            <button
+              class="book-tools-menu-item"
+              @click="showNewBookModal = true; showBookToolsMenu = false"
+            >
+              <i class="fa-solid fa-folder-plus"></i>
+              <span>新建世界书</span>
+            </button>
+
+            <button
+              v-if="lorebookState.currentBook"
+              class="book-tools-menu-item"
+              @click="openRenameModal(); showBookToolsMenu = false"
+            >
+              <i class="fa-solid fa-pen-to-square"></i>
+              <span>重命名当前世界书</span>
+            </button>
+
+            <button
+              class="book-tools-menu-item"
+              @click="openBatchBookModal(); showBookToolsMenu = false"
+            >
+              <i class="fa-solid fa-boxes-stacked"></i>
+              <span>批量管理 (导入/删除)</span>
+            </button>
+
+            <button
+              class="book-tools-menu-item"
+              @click="showHistoryModal = true; showBookToolsMenu = false"
+            >
+              <i class="fa-solid fa-clock-rotate-left"></i>
+              <span>操作日志与撤回</span>
+            </button>
+
+            <button
+              class="book-tools-menu-item"
+              @click="loadWorldBooks(); showBookToolsMenu = false"
+              :class="{ spinning: lorebookState.isLoadingBooks }"
+            >
+              <i class="fa-solid fa-rotate-right"></i>
+              <span>刷新世界书列表</span>
+            </button>
+
+            <div v-if="lorebookState.currentBook" class="book-tools-menu-divider"></div>
+
+            <button
+              v-if="lorebookState.currentBook"
+              class="book-tools-menu-item danger"
+              @click="showDeleteBookModal = true; showBookToolsMenu = false"
+            >
+              <i class="fa-solid fa-trash-can"></i>
+              <span>删除当前世界书</span>
+            </button>
+          </div>
+        </div>
       </div>
 
       <!-- 四大功能视图微型切换栏 (条目 / 分组 / 快照 / 监控) - 纯图标模式 -->
@@ -662,9 +680,9 @@ function handleExecuteBatchGroup() {
                     :value="getEntryStrategy(entry)"
                     @change="onStrategySelect(entry.uid, $event)"
                   >
-                    <option value="green">绿灯 (触发)</option>
-                    <option value="blue">蓝灯 (常驻)</option>
-                    <option v-if="ui.showVectorized" value="purple">链接 (向量)</option>
+                    <option value="green">绿灯</option>
+                    <option value="blue">蓝灯</option>
+                    <option v-if="ui.showVectorized" value="purple">链接</option>
                   </select>
                   <i class="fa-solid fa-caret-down pill-dropdown-arrow"></i>
                 </div>
@@ -825,9 +843,9 @@ function handleExecuteBatchGroup() {
                         :value="getEntryStrategy(entry)"
                         @change="onStrategySelect(entry.uid, $event)"
                       >
-                        <option value="green">绿灯 (触发)</option>
-                        <option value="blue">蓝灯 (常驻)</option>
-                        <option v-if="ui.showVectorized" value="purple">链接 (向量)</option>
+                        <option value="green">绿灯</option>
+                        <option value="blue">蓝灯</option>
+                        <option v-if="ui.showVectorized" value="purple">链接</option>
                       </select>
                       <i class="fa-solid fa-caret-down pill-dropdown-arrow"></i>
                     </div>
@@ -1786,6 +1804,82 @@ function handleExecuteBatchGroup() {
   border-color: var(--myext-accent);
 }
 
+/* 世界书更多操作下拉菜单 */
+.book-tools-dropdown-wrapper {
+  position: relative;
+}
+
+.book-tools-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: transparent;
+}
+
+.book-tools-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 101;
+  min-width: 175px;
+  background: var(--myext-surface);
+  border: 1px solid var(--myext-line-strong);
+  border-radius: var(--myext-radius-sm);
+  box-shadow: var(--myext-shadow);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.book-tools-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  background: transparent;
+  color: var(--myext-ink);
+  font-size: 13px;
+  border-radius: calc(var(--myext-radius-sm) - 2px);
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s ease;
+  white-space: nowrap;
+}
+
+.book-tools-menu-item i {
+  font-size: 13px;
+  width: 16px;
+  text-align: center;
+  color: var(--myext-ink-soft);
+}
+
+.book-tools-menu-item:hover,
+.book-tools-menu-item:active {
+  background: var(--myext-surface-2);
+}
+
+.book-tools-menu-item.danger {
+  color: var(--myext-danger, #e06c75);
+}
+
+.book-tools-menu-item.danger i {
+  color: var(--myext-danger, #e06c75);
+}
+
+.book-tools-menu-item.danger:hover,
+.book-tools-menu-item.danger:active {
+  background: rgba(224, 108, 117, 0.12);
+}
+
+.book-tools-menu-divider {
+  height: 1px;
+  background: var(--myext-line);
+  margin: 4px 2px;
+}
+
 /* 核心四大功能视图切换栏 */
 .view-tabs-bar {
   display: flex;
@@ -2112,8 +2206,21 @@ function handleExecuteBatchGroup() {
   white-space: nowrap;
   position: relative;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: none !important;
+  transform: none !important;
   touch-action: manipulation;
+}
+
+.strategy-pill-dropdown:active,
+.strategy-pill-dropdown:focus,
+.strategy-pill-dropdown:focus-within {
+  transform: none !important;
+  transition: none !important;
+}
+
+.entry-card:has(.strategy-pill-dropdown:active),
+.entry-card:has(.strategy-pill-dropdown:focus-within) {
+  transform: none !important;
 }
 
 .strategy-select {

@@ -501,8 +501,8 @@ export function duplicateEntry(uid: number): WorldInfoEntry | null {
 
   lorebookState.bookData.entries[newUid] = cloned;
   lorebookState.activeUid = newUid;
-  lorebookState.viewMode = 'editor';
   markDirty();
+  toast(`已成功复制词条副本 #${newUid}`, 'success');
   recordAction(`复制词条 [${src.comment || '#' + uid}] -> #${newUid}`, () => {
     if (!lorebookState.bookData?.entries[newUid]) return;
     delete lorebookState.bookData.entries[newUid];

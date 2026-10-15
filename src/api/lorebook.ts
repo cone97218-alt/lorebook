@@ -127,15 +127,46 @@ export async function fetchWorldBookData(name: string): Promise<WorldInfoData | 
 export async function saveWorldBookData(name: string, data: WorldInfoData): Promise<boolean> {
   if (!name || !data) return false;
   try {
-    const res = await fetch('/api/worldinfo/edit', {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({ name, data }),
-    });
-    if (!res.ok) return false;
-
-    // 触发 ST 宿主事件，通知其缓存已同步
     const ctx = getContext();
+
+    // 1. 优先调用宿主原生 saveWorldInfo，确保 SillyTavern 的 in-memory worldInfoCache 立即更新
+    let saved = false;
+    if (typeof ctx?.saveWorldInfo === 'function') {
+      try {
+        await ctx.saveWorldInfo(name, data, true);
+        saved = true;
+      } catch (err) {
+        console.warn('[Lorebook] ctx.saveWorldInfo call failed, falling back to fetch', err);
+      }
+    }
+
+    if (!saved) {
+      const res = await fetch('/api/worldinfo/edit', {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({ name, data }),
+      });
+      if (!res.ok) return false;
+    }
+
+    // 2. 刷新宿主原生世界书列表与编辑抽屉
+    if (typeof ctx?.updateWorldInfoList === 'function') {
+      try {
+        await ctx.updateWorldInfoList();
+      } catch {
+        /* ignore */
+      }
+    }
+
+    if (typeof ctx?.reloadWorldInfoEditor === 'function') {
+      try {
+        await ctx.reloadWorldInfoEditor();
+      } catch {
+        /* ignore */
+      }
+    }
+
+    // 3. 触发 ST 宿主事件，通知其缓存已同步
     if (ctx?.eventSource?.emit) {
       const eventName = ctx.eventTypes?.WORLDINFO_UPDATED || 'worldinfo_updated';
       void ctx.eventSource.emit(eventName, name, data);
@@ -160,17 +191,57 @@ export async function createNewWorldBook(name: string): Promise<boolean> {
 }
 
 /**
- * 删除世界书
+ * 删除世界书并热更新 SillyTavern 原生界面与缓存
  */
 export async function deleteWorldBook(name: string): Promise<boolean> {
   if (!name) return false;
   try {
+    const ctx = getContext();
     const res = await fetch('/api/worldinfo/delete', {
       method: 'POST',
       headers: getHeaders(),
       body: JSON.stringify({ name }),
     });
-    return res.ok;
+    if (!res.ok) return false;
+
+    // 1. 同步更新宿主原生世界书列表
+    if (typeof ctx?.updateWorldInfoList === 'function') {
+      try {
+        await ctx.updateWorldInfoList();
+      } catch {
+        /* ignore */
+      }
+    }
+
+    // 2. 直接清理原生 DOM 选单项以确保酒馆原生界面立即反映消失
+    try {
+      document.querySelectorAll<HTMLOptionElement>('#world_info option, #world_editor_select option, #character_world option')
+        .forEach((el) => {
+          if (el.textContent === name || el.value === name) {
+            el.remove();
+          }
+        });
+      $('#world_editor_select').trigger('change');
+    } catch {
+      /* ignore */
+    }
+
+    // 3. 刷新宿主原生世界书编辑器
+    if (typeof ctx?.reloadWorldInfoEditor === 'function') {
+      try {
+        await ctx.reloadWorldInfoEditor();
+      } catch {
+        /* ignore */
+      }
+    }
+
+    // 4. 触发宿主设置已变更事件
+    if (ctx?.eventSource?.emit) {
+      const eventName = ctx.eventTypes?.WORLDINFO_SETTINGS_UPDATED || 'worldinfo_settings_updated';
+      void ctx.eventSource.emit(eventName);
+    }
+
+    return true;
   } catch (err) {
     console.error(`[Lorebook] Failed to delete worldbook: ${name}`, err);
     return false;
