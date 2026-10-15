@@ -5,6 +5,8 @@ import {
   saveWorldBookData,
   createNewWorldBook,
   deleteWorldBook,
+  batchDeleteWorldBooks,
+  importWorldBookFromJson,
   renameWorldBook,
   getBoundWorldBooks,
   createEntryTemplate,
@@ -30,6 +32,7 @@ import {
 } from '@/api/activation';
 import { toast } from '@/st/toast';
 import { ui } from '@/state/ui';
+import { recordAction } from '@/state/history';
 
 export type { WorldBookSnapshot, SnapshotDiff } from '@/api/snapshots';
 export type { WorldInfoActivationBatch, WorldInfoActivationEntry } from '@/api/activation';
@@ -133,6 +136,7 @@ export const lorebookState = reactive({
   zenMode: false,
   showAdvanced: false,
   viewMode: 'list' as 'list' | 'editor',
+  savedScrollTop: 0,
 });
 
 watch(
@@ -467,6 +471,16 @@ export function addNewEntry(): WorldInfoEntry | null {
   lorebookState.activeUid = newUid;
   lorebookState.viewMode = 'editor';
   markDirty();
+  recordAction(`新建词条 [${entry.comment || '#' + newUid}]`, () => {
+    if (!lorebookState.bookData?.entries[newUid]) return;
+    delete lorebookState.bookData.entries[newUid];
+    if (lorebookState.activeUid === newUid) {
+      const remaining = Object.keys(lorebookState.bookData.entries).map(Number);
+      lorebookState.activeUid = remaining.length > 0 ? remaining[0] : null;
+    }
+    markDirty();
+    toast(`已撤回新建词条 #${newUid}`, 'info');
+  });
   return entry;
 }
 
@@ -489,6 +503,12 @@ export function duplicateEntry(uid: number): WorldInfoEntry | null {
   lorebookState.activeUid = newUid;
   lorebookState.viewMode = 'editor';
   markDirty();
+  recordAction(`复制词条 [${src.comment || '#' + uid}] -> #${newUid}`, () => {
+    if (!lorebookState.bookData?.entries[newUid]) return;
+    delete lorebookState.bookData.entries[newUid];
+    markDirty();
+    toast(`已撤回复制词条 #${newUid}`, 'info');
+  });
   return cloned;
 }
 
@@ -497,6 +517,9 @@ export function duplicateEntry(uid: number): WorldInfoEntry | null {
  */
 export function removeEntry(uid: number): void {
   if (!lorebookState.bookData) return;
+  const entry = lorebookState.bookData.entries[uid];
+  if (!entry) return;
+  const backup = JSON.parse(JSON.stringify(entry));
   delete lorebookState.bookData.entries[uid];
 
   if (lorebookState.activeUid === uid) {
@@ -505,6 +528,43 @@ export function removeEntry(uid: number): void {
   }
   markDirty();
   toast(`已删除词条 #${uid}`, 'info');
+  recordAction(`删除词条 [${backup.comment || '#' + uid}]`, () => {
+    if (!lorebookState.bookData) return;
+    lorebookState.bookData.entries[uid] = backup;
+    markDirty();
+    toast(`已恢复词条 [${backup.comment || '#' + uid}]`, 'success');
+  });
+}
+
+/**
+ * 设置词条激活策略（绿灯/蓝灯/紫灯）
+ */
+export function setEntryStrategy(uid: number, strategy: 'green' | 'blue' | 'purple'): void {
+  if (!lorebookState.bookData) return;
+  const entry = lorebookState.bookData.entries[uid];
+  if (!entry) return;
+  const prevConst = entry.constant;
+  const prevVect = entry.vectorized;
+
+  if (strategy === 'green') {
+    entry.constant = false;
+    entry.vectorized = false;
+  } else if (strategy === 'blue') {
+    entry.constant = true;
+    entry.vectorized = false;
+  } else if (strategy === 'purple') {
+    entry.constant = false;
+    entry.vectorized = true;
+  }
+  markDirty();
+  const label = strategy === 'green' ? '绿灯 (按词触发)' : strategy === 'blue' ? '蓝灯 (常驻注入)' : '链接 (向量化)';
+  recordAction(`将词条 [${entry.comment || '#' + uid}] 策略改为 ${label}`, () => {
+    if (!lorebookState.bookData?.entries[uid]) return;
+    lorebookState.bookData.entries[uid].constant = prevConst;
+    lorebookState.bookData.entries[uid].vectorized = prevVect;
+    markDirty();
+    toast(`已撤回词条 [${entry.comment || '#' + uid}] 的策略变更`, 'info');
+  });
 }
 
 /**
@@ -515,25 +575,16 @@ export function cycleEntryStrategy(uid: number): void {
   const entry = lorebookState.bookData.entries[uid];
   if (!entry) return;
   if (!entry.constant && !entry.vectorized) {
-    // 绿灯 -> 蓝灯
-    entry.constant = true;
-    entry.vectorized = false;
+    setEntryStrategy(uid, 'blue');
   } else if (entry.constant && !entry.vectorized) {
     if (ui.showVectorized) {
-      // 蓝灯 -> 链接/向量化
-      entry.constant = false;
-      entry.vectorized = true;
+      setEntryStrategy(uid, 'purple');
     } else {
-      // 蓝灯 -> 绿灯（用户设置隐藏链接时直接循环回绿灯）
-      entry.constant = false;
-      entry.vectorized = false;
+      setEntryStrategy(uid, 'green');
     }
   } else {
-    // 链接/向量化 -> 绿灯
-    entry.constant = false;
-    entry.vectorized = false;
+    setEntryStrategy(uid, 'green');
   }
-  markDirty();
 }
 
 /**
@@ -550,8 +601,15 @@ export function toggleEntryDisable(uid: number): void {
   if (!lorebookState.bookData) return;
   const entry = lorebookState.bookData.entries[uid];
   if (entry) {
-    entry.disable = !entry.disable;
+    const prev = entry.disable;
+    entry.disable = !prev;
     markDirty();
+    recordAction(`${entry.disable ? '停用' : '启用'}词条 [${entry.comment || '#' + uid}]`, () => {
+      if (!lorebookState.bookData?.entries[uid]) return;
+      lorebookState.bookData.entries[uid].disable = prev;
+      markDirty();
+      toast(`已撤回词条 [${entry.comment || '#' + uid}] 的启停状态`, 'info');
+    });
   }
 }
 
@@ -855,12 +913,26 @@ export function deselectAll(): void {
  */
 export function batchEnable(): void {
   if (!lorebookState.bookData || lorebookState.selectedUids.length === 0) return;
+  const count = lorebookState.selectedUids.length;
+  const prevStates: Record<number, boolean> = {};
   for (const uid of lorebookState.selectedUids) {
     const entry = lorebookState.bookData.entries[uid];
-    if (entry) entry.disable = false;
+    if (entry) {
+      prevStates[uid] = entry.disable;
+      entry.disable = false;
+    }
   }
   markDirty();
-  toast(`已启用 ${lorebookState.selectedUids.length} 个条目`, 'success');
+  toast(`已启用 ${count} 个条目`, 'success');
+  recordAction(`批量启用 ${count} 个条目`, () => {
+    if (!lorebookState.bookData) return;
+    for (const [uStr, disabled] of Object.entries(prevStates)) {
+      const e = lorebookState.bookData.entries[Number(uStr)];
+      if (e) e.disable = disabled;
+    }
+    markDirty();
+    toast(`已撤回批量启用 (${count} 项)`, 'info');
+  });
 }
 
 /**
@@ -868,12 +940,26 @@ export function batchEnable(): void {
  */
 export function batchDisable(): void {
   if (!lorebookState.bookData || lorebookState.selectedUids.length === 0) return;
+  const count = lorebookState.selectedUids.length;
+  const prevStates: Record<number, boolean> = {};
   for (const uid of lorebookState.selectedUids) {
     const entry = lorebookState.bookData.entries[uid];
-    if (entry) entry.disable = true;
+    if (entry) {
+      prevStates[uid] = entry.disable;
+      entry.disable = true;
+    }
   }
   markDirty();
-  toast(`已停用 ${lorebookState.selectedUids.length} 个条目`, 'info');
+  toast(`已停用 ${count} 个条目`, 'info');
+  recordAction(`批量停用 ${count} 个条目`, () => {
+    if (!lorebookState.bookData) return;
+    for (const [uStr, disabled] of Object.entries(prevStates)) {
+      const e = lorebookState.bookData.entries[Number(uStr)];
+      if (e) e.disable = disabled;
+    }
+    markDirty();
+    toast(`已撤回批量停用 (${count} 项)`, 'info');
+  });
 }
 
 /**
@@ -882,13 +968,25 @@ export function batchDisable(): void {
 export function batchDelete(): void {
   if (!lorebookState.bookData || lorebookState.selectedUids.length === 0) return;
   const count = lorebookState.selectedUids.length;
+  const deletedEntries: Record<number, WorldInfoEntry> = {};
   for (const uid of lorebookState.selectedUids) {
-    delete lorebookState.bookData.entries[uid];
+    if (lorebookState.bookData.entries[uid]) {
+      deletedEntries[uid] = JSON.parse(JSON.stringify(lorebookState.bookData.entries[uid]));
+      delete lorebookState.bookData.entries[uid];
+    }
   }
   lorebookState.selectedUids = [];
   lorebookState.isBatchMode = false;
   markDirty();
   toast(`已删除 ${count} 个条目`, 'info');
+  recordAction(`批量删除 ${count} 个条目`, () => {
+    if (!lorebookState.bookData) return;
+    for (const [uStr, entry] of Object.entries(deletedEntries)) {
+      lorebookState.bookData.entries[Number(uStr)] = entry;
+    }
+    markDirty();
+    toast(`已恢复批量删除的 ${count} 个条目`, 'success');
+  });
 }
 
 /**
@@ -897,9 +995,13 @@ export function batchDelete(): void {
 export async function batchSetGroup(groupName: string): Promise<void> {
   if (!lorebookState.bookData || lorebookState.selectedUids.length === 0) return;
   const cleanGrp = groupName.trim();
+  const count = lorebookState.selectedUids.length;
+  const prevGroups: Record<number, string> = {};
+
   for (const uid of lorebookState.selectedUids) {
     const entry = lorebookState.bookData.entries[uid];
     if (entry) {
+      prevGroups[uid] = entry.group || '';
       entry.group = cleanGrp;
       if (!entry.extensions) entry.extensions = {};
       (entry.extensions as any).group = cleanGrp;
@@ -909,6 +1011,67 @@ export async function batchSetGroup(groupName: string): Promise<void> {
   markDirty();
   await saveImmediately();
   toast(`已将选中条目移入分组「${cleanGrp || '未分组'}」`, 'success');
+
+  recordAction(`移动 ${count} 个条目至分组「${cleanGrp || '未分组'}」`, () => {
+    if (!lorebookState.bookData) return;
+    for (const [uStr, grp] of Object.entries(prevGroups)) {
+      const e = lorebookState.bookData.entries[Number(uStr)];
+      if (e) {
+        e.group = grp;
+        if (!e.extensions) e.extensions = {};
+        (e.extensions as any).group = grp;
+      }
+    }
+    saveGroupStorage(lorebookState.currentBook, lorebookState.bookData);
+    markDirty();
+    void saveImmediately();
+    toast(`已撤回分组移动 (${count} 项)`, 'info');
+  });
+}
+
+/**
+ * 批量删除多本世界书
+ */
+export async function batchDeleteBooks(names: string[]): Promise<boolean> {
+  if (!names.length) return false;
+  const res = await batchDeleteWorldBooks(names);
+  if (res.success > 0) {
+    toast(`成功删除 ${res.success} 本世界书`, 'success');
+    if (names.includes(lorebookState.currentBook)) {
+      lorebookState.currentBook = '';
+      lorebookState.bookData = null;
+    }
+    await loadWorldBooks();
+    return true;
+  } else {
+    toast('删除失败', 'warning');
+    return false;
+  }
+}
+
+/**
+ * 批量导入多本世界书 JSON
+ */
+export async function batchImportBooks(files: FileList | File[]): Promise<number> {
+  let count = 0;
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    const bookName = file.name.replace(/\.json$/i, '');
+    try {
+      const text = await file.text();
+      const ok = await importWorldBookFromJson(bookName, text);
+      if (ok) count++;
+    } catch (err) {
+      console.error(`[Lorebook] Failed to import ${file.name}:`, err);
+    }
+  }
+  if (count > 0) {
+    toast(`成功导入 ${count} 本世界书`, 'success');
+    await loadWorldBooks();
+  } else {
+    toast('导入未成功，请检查文件格式', 'warning');
+  }
+  return count;
 }
 
 /**

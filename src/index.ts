@@ -4,7 +4,7 @@ import { hydrateSettings } from '@/api/settings';
 import { getContext } from '@/st/context';
 import { guardEditableArrowKeys } from '@/st/keyboard';
 import { injectMenuButton, injectWorldDrawerButton, syncWorldDrawerButton } from '@/menu';
-import { syncTopBarButton } from '@/topbar';
+import { syncTopBarButton, initNativeWorldBookInterceptor } from '@/topbar';
 import { syncQuickReplyButton } from '@/quickReply';
 import { registerPublicInterface } from '@/public/register';
 import { ui } from '@/state/ui';
@@ -140,6 +140,8 @@ $(() => {
 
   syncTopBarButton(ui.showTopBar, '流畅世界书');
   watch(() => ui.showTopBar, on => syncTopBarButton(on, '流畅世界书'));
+
+  initNativeWorldBookInterceptor(() => ui.replaceNativeWorldBook);
 
   syncQuickReplyButton(ui.showQuickReply, '流畅世界书');
   watch(() => ui.showQuickReply, on => syncQuickReplyButton(on, '流畅世界书'));

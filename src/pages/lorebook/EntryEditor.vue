@@ -465,13 +465,37 @@ function toggleDisable() {
   markDirty();
 }
 
+let touchStartX = 0;
+let touchStartY = 0;
+
+function handleTouchStart(e: TouchEvent) {
+  if (e.touches.length === 1) {
+    touchStartX = e.touches[0].clientX;
+    touchStartY = e.touches[0].clientY;
+  }
+}
+
+function handleTouchEnd(e: TouchEvent) {
+  if (e.changedTouches.length === 1) {
+    const deltaX = e.changedTouches[0].clientX - touchStartX;
+    const deltaY = e.changedTouches[0].clientY - touchStartY;
+    // 右滑退出返回列表 (滑动距离 > 60px 且主要为水平手势)
+    if (deltaX > 60 && Math.abs(deltaX) > Math.abs(deltaY) * 1.5) {
+      const target = e.target as HTMLElement | null;
+      if (target?.tagName === 'INPUT' && (target as HTMLInputElement).type === 'range') return;
+      if (target?.closest('.symbol-bar, .symbols-scroll-area, .keyword-chips-row, .accessories-wrapper')) return;
+      closeEditor();
+    }
+  }
+}
+
 onUnmounted(() => {
   if (statsTimer) clearTimeout(statsTimer);
 });
 </script>
 
 <template>
-  <div class="editor-pane">
+  <div class="editor-pane" @touchstart="handleTouchStart" @touchend="handleTouchEnd">
     <div v-if="!activeEntry" class="empty-view">
       <i class="fa-solid fa-pen-ruler empty-icon"></i>
       <button class="icon-btn" @click="closeEditor">
@@ -1322,10 +1346,13 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 12px;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .drawer-field-label {
   width: 72px;
+  min-width: 72px;
   font-size: 13px;
   color: var(--myext-ink-soft);
   flex-shrink: 0;
@@ -1334,15 +1361,18 @@ onUnmounted(() => {
 }
 
 .drawer-field-input-box {
-  flex: 1;
+  flex: 1 1 0%;
+  min-width: 0;
   display: flex;
   align-items: center;
   position: relative;
+  box-sizing: border-box;
 }
 
 .drawer-field-input-box .drawer-input {
   width: 100%;
   padding-right: 28px;
+  box-sizing: border-box;
 }
 
 .drawer-input-unit {
@@ -1377,7 +1407,10 @@ onUnmounted(() => {
 
 .drawer-select,
 .drawer-input {
-  flex: 1;
+  flex: 1 1 0%;
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
   height: 36px;
   padding: 0 10px;
   border: 1px solid var(--myext-line);
@@ -1389,7 +1422,9 @@ onUnmounted(() => {
 }
 
 .drawer-range {
-  flex: 1;
+  flex: 1 1 0%;
+  min-width: 0;
+  box-sizing: border-box;
   height: 36px;
   accent-color: var(--myext-accent);
 }
@@ -1598,5 +1633,20 @@ onUnmounted(() => {
 .drawer-slide-leave-to {
   transform: translateY(100%);
   opacity: 0;
+}
+
+@media (max-width: 480px) {
+  .advanced-drawer {
+    padding: 10px 12px 18px;
+    box-sizing: border-box;
+  }
+  .drawer-field-row {
+    gap: 8px;
+  }
+  .drawer-field-label {
+    width: 64px;
+    min-width: 64px;
+    font-size: 12px;
+  }
 }
 </style>

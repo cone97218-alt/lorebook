@@ -514,7 +514,7 @@ const iconGuides = [
             <input
               v-model="newSymbolLabel"
               type="text"
-              placeholder="按钮显示 (如 //)"
+              placeholder="显示 (//)"
               class="sym-input label-in"
               maxlength="10"
             />
@@ -543,6 +543,14 @@ const iconGuides = [
       </header>
 
       <div v-show="openSections.entrances" class="accordion-content">
+        <div class="switch-row">
+          <div class="switch-info">
+            <span class="switch-title">替换顶部原生世界书图标</span>
+            <span class="switch-desc">点击酒馆顶部原有世界书图标时，直接打开本扩展</span>
+          </div>
+          <input v-model="ui.replaceNativeWorldBook" type="checkbox" class="toggle-checkbox" />
+        </div>
+
         <div class="switch-row">
           <div class="switch-info">
             <span class="switch-title">原生世界书抽屉按钮</span>
@@ -979,8 +987,11 @@ const iconGuides = [
 
 .add-symbol-form {
   display: flex;
+  align-items: center;
   gap: 6px;
   margin-top: 10px;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .sym-input {
@@ -991,6 +1002,7 @@ const iconGuides = [
   font-size: 12px;
   color: var(--myext-ink);
   outline: none;
+  box-sizing: border-box;
 }
 
 .sym-input:focus {
@@ -998,12 +1010,14 @@ const iconGuides = [
 }
 
 .label-in {
-  width: 100px;
-  flex-shrink: 0;
+  width: 80px;
+  flex: 0 0 80px;
+  min-width: 0;
 }
 
 .text-in {
-  flex: 1;
+  flex: 1 1 0%;
+  min-width: 0;
 }
 
 .add-sym-btn {

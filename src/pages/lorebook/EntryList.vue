@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, onActivated, onBeforeUnmount, nextTick } from 'vue';
 import {
   lorebookState,
   filteredEntries,
@@ -13,6 +13,7 @@ import {
   removeEntry,
   toggleEntryDisable,
   cycleEntryStrategy,
+  setEntryStrategy,
   loadWorldBooks,
   createBook,
   deleteCurrentBook,
@@ -36,6 +37,8 @@ import {
   batchSetGroup,
   batchExportJson,
   batchImportJson,
+  batchDeleteBooks,
+  batchImportBooks,
   checkLastActivation,
   type WorldBookSnapshot,
   type SnapshotDiff,
@@ -44,6 +47,7 @@ import {
 } from '@/state/lorebook';
 import { ui } from '@/state/ui';
 import { toast } from '@/st/toast';
+import { historyList, undoAction, clearHistory } from '@/state/history';
 
 const showNewBookModal = ref(false);
 const newBookName = ref('');
@@ -68,6 +72,140 @@ const activeSnapshotDiff = computed<SnapshotDiff | null>(() => {
 });
 const newSnapshotName = ref('');
 const fileInputRef = ref<HTMLInputElement | null>(null);
+
+// 历史操作日志弹窗
+const showHistoryModal = ref(false);
+
+// 批量管理世界书 (删除与导入)
+const showBatchBookModal = ref(false);
+const batchBookTab = ref<'delete' | 'import'>('delete');
+const selectedBookNames = ref<string[]>([]);
+const batchImportFilesList = ref<File[]>([]);
+const batchFileInput = ref<HTMLInputElement | null>(null);
+
+// 记忆滚动位置
+const entriesScrollArea = ref<HTMLElement | null>(null);
+
+function onScroll(e: Event) {
+  const el = e.target as HTMLElement;
+  lorebookState.savedScrollTop = el.scrollTop;
+}
+
+function restoreScroll() {
+  nextTick(() => {
+    if (entriesScrollArea.value && lorebookState.savedScrollTop > 0) {
+      entriesScrollArea.value.scrollTop = lorebookState.savedScrollTop;
+    }
+  });
+}
+
+onMounted(() => {
+  restoreScroll();
+});
+
+onActivated(() => {
+  restoreScroll();
+});
+
+onBeforeUnmount(() => {
+  if (entriesScrollArea.value) {
+    lorebookState.savedScrollTop = entriesScrollArea.value.scrollTop;
+  }
+});
+
+// 策略下拉获取与切换
+function getEntryStrategy(entry: { constant?: boolean; vectorized?: boolean }): 'green' | 'blue' | 'purple' {
+  if (entry.vectorized) return 'purple';
+  if (entry.constant) return 'blue';
+  return 'green';
+}
+
+function onStrategySelect(uid: number, event: Event) {
+  const target = event.target as HTMLSelectElement;
+  setEntryStrategy(uid, target.value as 'green' | 'blue' | 'purple');
+}
+
+// 触摸左右滑动切换视图
+let touchStartX = 0;
+let touchStartY = 0;
+
+function handleTouchStart(e: TouchEvent) {
+  if (e.touches.length === 1) {
+    touchStartX = e.touches[0].clientX;
+    touchStartY = e.touches[0].clientY;
+  }
+}
+
+function handleTouchEnd(e: TouchEvent) {
+  if (e.changedTouches.length === 1) {
+    const deltaX = e.changedTouches[0].clientX - touchStartX;
+    const deltaY = e.changedTouches[0].clientY - touchStartY;
+    // 水平手势幅度需大于 50px 且明显大于垂直移动
+    if (Math.abs(deltaX) > 50 && Math.abs(deltaX) > Math.abs(deltaY) * 1.5) {
+      const target = e.target as HTMLElement | null;
+      if (target?.closest('.book-scope-bar, .batch-actions-scroll, .view-tabs-bar, .modal-box, select, input')) return;
+
+      const tabs: WorldBookTab[] = ['entries', 'groups', 'snapshots', 'monitor'];
+      const curIndex = tabs.indexOf(lorebookState.activeTab);
+      if (deltaX < 0) {
+        // 左滑 -> 下一个 tab
+        if (curIndex < tabs.length - 1) {
+          lorebookState.activeTab = tabs[curIndex + 1];
+        }
+      } else {
+        // 右滑 -> 上一个 tab
+        if (curIndex > 0) {
+          lorebookState.activeTab = tabs[curIndex - 1];
+        }
+      }
+    }
+  }
+}
+
+// 批量管理世界书方法
+function openBatchBookModal() {
+  selectedBookNames.value = [];
+  batchImportFilesList.value = [];
+  batchBookTab.value = 'delete';
+  showBatchBookModal.value = true;
+}
+
+function selectAllBooks() {
+  selectedBookNames.value = [...lorebookState.books];
+}
+
+function invertSelectBooks() {
+  const currentSet = new Set(selectedBookNames.value);
+  selectedBookNames.value = lorebookState.books.filter(b => !currentSet.has(b));
+}
+
+async function handleExecuteBatchDeleteBooks() {
+  if (!selectedBookNames.value.length) return;
+  const ok = await batchDeleteBooks(selectedBookNames.value);
+  if (ok) {
+    selectedBookNames.value = [];
+    showBatchBookModal.value = false;
+  }
+}
+
+function triggerBatchFilePicker() {
+  batchFileInput.value?.click();
+}
+
+function handleBatchFileSelect(e: Event) {
+  const files = (e.target as HTMLInputElement).files;
+  if (!files || !files.length) return;
+  batchImportFilesList.value = Array.from(files);
+}
+
+async function handleExecuteBatchImport() {
+  if (!batchImportFilesList.value.length) return;
+  const count = await batchImportBooks(batchImportFilesList.value);
+  if (count > 0) {
+    batchImportFilesList.value = [];
+    showBatchBookModal.value = false;
+  }
+}
 
 function setBookScope(scope: BookScopeFilter) {
   lorebookState.bookScope = scope;
@@ -204,7 +342,7 @@ function handleExecuteBatchGroup() {
 </script>
 
 <template>
-  <div class="entry-list-pane">
+  <div class="entry-list-pane" @touchstart="handleTouchStart" @touchend="handleTouchEnd">
     <!-- 顶栏：书库选择、快捷绑定筛选与功能视图切换 -->
     <header class="book-header">
       <!-- 快捷范围胶囊栏 (全部/角色卡/当前会话/全局) -->
@@ -269,6 +407,24 @@ function handleExecuteBatchGroup() {
           </select>
         </div>
 
+        <!-- 批量管理世界书 (批量删除与批量导入) -->
+        <button
+          class="icon-btn"
+          @click="openBatchBookModal"
+          title="批量管理世界书 (删除/导入)"
+        >
+          <i class="fa-solid fa-boxes-stacked"></i>
+        </button>
+
+        <!-- 操作历史与撤回 (近20条记录) -->
+        <button
+          class="icon-btn"
+          @click="showHistoryModal = true"
+          title="操作日志与撤回"
+        >
+          <i class="fa-solid fa-clock-rotate-left"></i>
+        </button>
+
         <!-- 新建世界书 -->
         <button
           class="icon-btn"
@@ -288,13 +444,13 @@ function handleExecuteBatchGroup() {
           <i class="fa-solid fa-pen-to-square"></i>
         </button>
 
-        <!-- 批量整理模式开关 -->
+        <!-- 批量整理条目模式开关 -->
         <button
           v-if="lorebookState.currentBook"
           class="icon-btn"
           :class="{ active: lorebookState.isBatchMode }"
           @click="toggleBatchMode"
-          title="批量整理模式"
+          title="批量整理条目模式"
         >
           <i class="fa-solid fa-list-check"></i>
         </button>
@@ -414,7 +570,7 @@ function handleExecuteBatchGroup() {
     </header>
 
     <!-- 主展示区 -->
-    <main class="entries-scroll-area">
+    <main ref="entriesScrollArea" class="entries-scroll-area" @scroll="onScroll">
       <div v-if="lorebookState.isLoadingData" class="state-icon-box">
         <i class="fa-solid fa-circle-notch fa-spin"></i>
       </div>
@@ -490,20 +646,28 @@ function handleExecuteBatchGroup() {
             <!-- 第二行：小字放其余信息 (策略、所属分组、停用、位置、顺序、关键词) -->
             <div class="card-row-sub">
               <div class="card-meta-tags">
-                <!-- 激活策略灯胶囊 (点击切换 绿灯 <-> 蓝灯 <-> 链接) -->
-                <button
-                  class="strategy-pill-btn"
+                <!-- 激活策略灯下拉菜单 (减少误触) -->
+                <div
+                  class="strategy-pill-dropdown"
                   :class="{
                     'pill-purple': entry.vectorized,
                     'pill-blue': !entry.vectorized && entry.constant,
                     'pill-green': !entry.vectorized && !entry.constant,
                   }"
-                  @click.stop="cycleEntryStrategy(entry.uid)"
-                  :title="'当前策略：' + (entry.vectorized ? '链接' : (entry.constant ? '蓝灯常驻' : '绿灯触发')) + ' (点击切换)'"
+                  @click.stop
                 >
                   <span class="pill-lamp-dot"></span>
-                  <span class="pill-lamp-text">{{ entry.vectorized ? '链接' : (entry.constant ? '蓝灯' : '绿灯') }}</span>
-                </button>
+                  <select
+                    class="strategy-select"
+                    :value="getEntryStrategy(entry)"
+                    @change="onStrategySelect(entry.uid, $event)"
+                  >
+                    <option value="green">绿灯 (触发)</option>
+                    <option value="blue">蓝灯 (常驻)</option>
+                    <option v-if="ui.showVectorized" value="purple">链接 (向量)</option>
+                  </select>
+                  <i class="fa-solid fa-caret-down pill-dropdown-arrow"></i>
+                </div>
 
                 <!-- 停用状态注明 -->
                 <span v-if="entry.disable" class="badge-tag tag-gray">已停用</span>
@@ -645,18 +809,28 @@ function handleExecuteBatchGroup() {
                 <!-- 第二行：策略胶囊与元信息 -->
                 <div class="card-row-sub">
                   <div class="card-meta-tags">
-                    <button
-                      class="strategy-pill-btn"
+                    <!-- 激活策略灯下拉菜单 (减少误触) -->
+                    <div
+                      class="strategy-pill-dropdown"
                       :class="{
                         'pill-purple': entry.vectorized,
                         'pill-blue': !entry.vectorized && entry.constant,
                         'pill-green': !entry.vectorized && !entry.constant,
                       }"
-                      @click.stop="cycleEntryStrategy(entry.uid)"
+                      @click.stop
                     >
                       <span class="pill-lamp-dot"></span>
-                      <span class="pill-lamp-text">{{ entry.vectorized ? '链接' : (entry.constant ? '蓝灯' : '绿灯') }}</span>
-                    </button>
+                      <select
+                        class="strategy-select"
+                        :value="getEntryStrategy(entry)"
+                        @change="onStrategySelect(entry.uid, $event)"
+                      >
+                        <option value="green">绿灯 (触发)</option>
+                        <option value="blue">蓝灯 (常驻)</option>
+                        <option v-if="ui.showVectorized" value="purple">链接 (向量)</option>
+                      </select>
+                      <i class="fa-solid fa-caret-down pill-dropdown-arrow"></i>
+                    </div>
                     <span v-if="entry.disable" class="badge-tag tag-gray">已停用</span>
                     <span v-if="entry.position === 4" class="badge-tag tag-depth">@D{{ entry.depth ?? 4 }}</span>
                     <span v-else-if="entry.position === 0" class="badge-tag tag-pos">角色前</span>
@@ -1041,16 +1215,57 @@ function handleExecuteBatchGroup() {
             <i class="fa-solid fa-xmark"></i>
           </button>
         </div>
-        <div class="modal-input-row">
-          <i class="fa-solid fa-folder modal-sub-icon"></i>
-          <input
-            v-model="batchGroupName"
-            type="text"
-            placeholder="移动至分组名称 (留空为未分组)..."
-            class="modal-input"
-            @keydown.enter="handleExecuteBatchGroup"
-            autofocus
-          />
+        <div class="modal-group-select-section">
+          <!-- 快捷选择已有分组下拉框 -->
+          <div class="modal-field-block">
+            <span class="modal-field-label">移动至现有分组：</span>
+            <div class="modal-select-row">
+              <i class="fa-solid fa-list-check modal-sub-icon"></i>
+              <select v-model="batchGroupName" class="modal-select-field">
+                <option value="">(移出当前分组 / 未分组)</option>
+                <option v-for="g in entryGroups" :key="g.name" :value="g.name">
+                  {{ g.name }} ({{ g.totalCount }}条)
+                </option>
+              </select>
+            </div>
+          </div>
+
+          <!-- 快速点击分组胶囊 -->
+          <div class="modal-group-chips">
+            <button
+              type="button"
+              class="modal-group-chip"
+              :class="{ active: batchGroupName === '' }"
+              @click="batchGroupName = ''"
+            >
+              未分组
+            </button>
+            <button
+              v-for="g in entryGroups"
+              :key="g.name"
+              type="button"
+              class="modal-group-chip"
+              :class="{ active: batchGroupName === g.name }"
+              @click="batchGroupName = g.name"
+            >
+              {{ g.name }}
+            </button>
+          </div>
+
+          <!-- 或输入/新建分组名称 -->
+          <div class="modal-field-block">
+            <span class="modal-field-label">或输入新分组名称：</span>
+            <div class="modal-input-row">
+              <i class="fa-solid fa-folder modal-sub-icon"></i>
+              <input
+                v-model="batchGroupName"
+                type="text"
+                placeholder="输入分组名称 (留空为未分组)..."
+                class="modal-input"
+                @keydown.enter="handleExecuteBatchGroup"
+              />
+            </div>
+          </div>
         </div>
         <div class="modal-btns">
           <button class="icon-btn" @click="showBatchGroupModal = false" title="取消">
@@ -1100,6 +1315,169 @@ function handleExecuteBatchGroup() {
               <i class="fa-solid fa-check"></i>
             </button>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 内联弹窗：操作日志与撤回 (近20条记录) -->
+    <div v-if="showHistoryModal" class="modal-inline-mask" data-tt-mobile-surface="backdrop">
+      <div class="modal-box history-modal-box" data-tt-mobile-surface="fullscreen-window">
+        <div class="modal-title-bar">
+          <div class="modal-title-lead">
+            <i class="fa-solid fa-clock-rotate-left text-accent"></i>
+            <span class="modal-title-text">世界书 · 操作日志 (近20条)</span>
+          </div>
+          <button class="icon-btn-ghost" @click="showHistoryModal = false">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+
+        <div class="history-list-scroll">
+          <div v-if="historyList.length === 0" class="history-empty">
+            <i class="fa-regular fa-clock"></i>
+            <span>暂无最近操作记录</span>
+          </div>
+          <div
+            v-for="item in historyList"
+            :key="item.id"
+            class="history-item-row"
+            :class="{ undone: item.undone }"
+          >
+            <div class="history-item-main">
+              <span class="history-item-time">{{ item.time }}</span>
+              <span class="history-item-desc">{{ item.desc }}</span>
+            </div>
+            <button
+              class="history-undo-btn"
+              :disabled="item.undone"
+              @click="undoAction(item.id)"
+              :title="item.undone ? '已撤回' : '撤回此操作'"
+            >
+              <i class="fa-solid fa-rotate-left"></i>
+              <span>{{ item.undone ? '已撤回' : '撤回' }}</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="modal-btns">
+          <button
+            v-if="historyList.length"
+            class="mini-tool-btn text-danger"
+            @click="clearHistory"
+            title="清空所有操作日志"
+          >
+            <i class="fa-solid fa-trash-can"></i>
+            <span>清空记录</span>
+          </button>
+          <button class="icon-btn" @click="showHistoryModal = false" title="关闭">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 内联弹窗：批量管理世界书 (批量删除与批量导入) -->
+    <div v-if="showBatchBookModal" class="modal-inline-mask" data-tt-mobile-surface="backdrop">
+      <div class="modal-box batch-book-modal-box" data-tt-mobile-surface="fullscreen-window">
+        <div class="modal-title-bar">
+          <div class="modal-title-lead">
+            <i class="fa-solid fa-boxes-stacked text-accent"></i>
+            <span class="modal-title-text">世界书 · 批量管理</span>
+          </div>
+          <button class="icon-btn-ghost" @click="showBatchBookModal = false">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+
+        <!-- 标签切换 (批量删除 / 批量导入) -->
+        <div class="batch-book-tabs">
+          <button
+            type="button"
+            class="batch-book-tab-btn"
+            :class="{ active: batchBookTab === 'delete' }"
+            @click="batchBookTab = 'delete'"
+          >
+            <i class="fa-solid fa-trash-can"></i>
+            <span>批量删除</span>
+          </button>
+          <button
+            type="button"
+            class="batch-book-tab-btn"
+            :class="{ active: batchBookTab === 'import' }"
+            @click="batchBookTab = 'import'"
+          >
+            <i class="fa-solid fa-file-import"></i>
+            <span>批量导入</span>
+          </button>
+        </div>
+
+        <!-- 批量删除面板 -->
+        <div v-if="batchBookTab === 'delete'" class="batch-delete-body">
+          <div class="batch-book-tools">
+            <button type="button" class="mini-tool-btn" @click="selectAllBooks">全选</button>
+            <button type="button" class="mini-tool-btn" @click="invertSelectBooks">反选</button>
+            <button type="button" class="mini-tool-btn" @click="selectedBookNames = []">清空</button>
+            <span class="batch-selected-count">已选 {{ selectedBookNames.length }} / {{ lorebookState.books.length }} 本</span>
+          </div>
+          <div class="batch-books-scroll">
+            <label
+              v-for="b in lorebookState.books"
+              :key="b"
+              class="batch-book-item"
+              :class="{ selected: selectedBookNames.includes(b) }"
+            >
+              <input type="checkbox" :value="b" v-model="selectedBookNames" class="batch-checkbox" />
+              <i class="fa-solid fa-book-bookmark"></i>
+              <span class="batch-book-name">{{ b }}</span>
+            </label>
+          </div>
+          <div class="batch-delete-confirm-box" v-if="selectedBookNames.length">
+            <button type="button" class="batch-danger-execute-btn" @click="handleExecuteBatchDeleteBooks">
+              <i class="fa-solid fa-trash-can"></i>
+              <span>确认删除选中的 {{ selectedBookNames.length }} 本世界书</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- 批量导入面板 -->
+        <div v-else class="batch-import-body">
+          <input
+            type="file"
+            ref="batchFileInput"
+            multiple
+            accept=".json"
+            style="display: none;"
+            @change="handleBatchFileSelect"
+          />
+          <div class="import-dropzone" @click="triggerBatchFilePicker">
+            <i class="fa-solid fa-cloud-arrow-up drop-icon"></i>
+            <span class="drop-text">点击选择多个世界书 JSON 文件</span>
+            <span class="drop-subtext">支持单次选择多份 .json 文件批量导入</span>
+          </div>
+
+          <div v-if="batchImportFilesList.length" class="batch-file-preview-list">
+            <div class="preview-head">
+              <span>待导入文件 ({{ batchImportFilesList.length }})：</span>
+              <button type="button" class="mini-tool-btn text-xs" @click="batchImportFilesList = []">清除</button>
+            </div>
+            <div class="file-names-scroll">
+              <div v-for="(f, i) in batchImportFilesList" :key="i" class="file-preview-row">
+                <i class="fa-solid fa-file-code"></i>
+                <span class="preview-filename">{{ f.name }}</span>
+                <span class="preview-filesize">({{ (f.size / 1024).toFixed(1) }} KB)</span>
+              </div>
+            </div>
+            <button type="button" class="batch-execute-import-btn" @click="handleExecuteBatchImport">
+              <i class="fa-solid fa-file-import"></i>
+              <span>开始批量导入 ({{ batchImportFilesList.length }} 个文件)</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="modal-btns">
+          <button class="icon-btn" @click="showBatchBookModal = false" title="关闭">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
         </div>
       </div>
     </div>
@@ -1720,26 +2098,49 @@ function handleExecuteBatchGroup() {
   min-width: 0;
 }
 
-.strategy-pill-btn {
+.strategy-pill-dropdown {
   border: 1px solid transparent;
   background: none;
-  padding: 2px 7px;
+  padding: 1px 5px;
   border-radius: 5px;
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
   font-size: 11px;
   font-weight: 500;
-  cursor: pointer;
   line-height: 1.4;
   white-space: nowrap;
+  position: relative;
+  cursor: pointer;
   transition: all 0.15s ease;
   touch-action: manipulation;
 }
 
-.strategy-pill-btn:active {
-  transform: scale(0.93);
-  opacity: 0.85;
+.strategy-select {
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  outline: none;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.strategy-select option {
+  background: var(--myext-surface);
+  color: var(--myext-ink);
+  font-size: 12px;
+}
+
+.pill-dropdown-arrow {
+  font-size: 9px;
+  opacity: 0.65;
+  pointer-events: none;
+  margin-left: 1px;
 }
 
 .pill-lamp-dot {
@@ -2773,5 +3174,397 @@ function handleExecuteBatchGroup() {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 分组移动弹窗样式 */
+.modal-group-select-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 10px 0;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.modal-field-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.modal-field-label {
+  font-size: 12px;
+  color: var(--myext-ink-soft);
+  font-weight: 500;
+}
+
+.modal-select-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--myext-surface-2);
+  border: 1px solid var(--myext-line);
+  border-radius: var(--myext-radius-sm);
+  padding: 0 10px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.modal-select-field {
+  flex: 1 1 0%;
+  height: 36px;
+  background: transparent;
+  border: none;
+  color: var(--myext-ink);
+  font-size: 13px;
+  outline: none;
+  min-width: 0;
+}
+
+.modal-select-field option {
+  background: var(--myext-surface);
+  color: var(--myext-ink);
+}
+
+.modal-group-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-height: 90px;
+  overflow-y: auto;
+  padding: 2px 0;
+}
+
+.modal-group-chip {
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  border: 1px solid var(--myext-line);
+  background: var(--myext-surface-2);
+  color: var(--myext-ink-soft);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.modal-group-chip.active {
+  background: var(--myext-accent);
+  color: var(--myext-accent-ink);
+  border-color: var(--myext-accent);
+  font-weight: 600;
+}
+
+/* 操作日志与撤回弹窗 */
+.history-modal-box {
+  max-width: 480px;
+  max-height: 75vh;
+}
+
+.history-list-scroll {
+  max-height: 52vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.history-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--myext-ink-muted);
+  padding: 30px 0;
+  font-size: 13px;
+}
+
+.history-item-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--myext-radius-sm);
+  background: var(--myext-surface-2);
+  border: 1px solid var(--myext-line);
+}
+
+.history-item-row.undone {
+  opacity: 0.5;
+  text-decoration: line-through;
+}
+
+.history-item-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.history-item-time {
+  font-size: 10px;
+  color: var(--myext-ink-muted);
+  font-family: var(--myext-font-mono);
+}
+
+.history-item-desc {
+  font-size: 12px;
+  color: var(--myext-ink);
+  word-break: break-all;
+}
+
+.history-undo-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: var(--myext-radius-sm);
+  border: 1px solid var(--myext-accent);
+  background: var(--myext-accent);
+  color: var(--myext-accent-ink);
+  font-size: 11px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.history-undo-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  border-color: var(--myext-line);
+  background: var(--myext-surface);
+  color: var(--myext-ink-muted);
+}
+
+/* 批量管理世界书弹窗 */
+.batch-book-modal-box {
+  max-width: 500px;
+  max-height: 80vh;
+}
+
+.batch-book-tabs {
+  display: flex;
+  gap: 8px;
+  border-bottom: 1px solid var(--myext-line);
+  padding-bottom: 8px;
+  margin-bottom: 10px;
+}
+
+.batch-book-tab-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 34px;
+  border: 1px solid var(--myext-line);
+  border-radius: var(--myext-radius-sm);
+  background: var(--myext-surface-2);
+  color: var(--myext-ink-soft);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.batch-book-tab-btn.active {
+  background: var(--myext-accent);
+  color: var(--myext-accent-ink);
+  border-color: var(--myext-accent);
+  font-weight: 600;
+}
+
+.batch-delete-body,
+.batch-import-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.batch-book-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mini-tool-btn {
+  padding: 3px 8px;
+  font-size: 11px;
+  border: 1px solid var(--myext-line);
+  border-radius: var(--myext-radius-sm);
+  background: var(--myext-surface-2);
+  color: var(--myext-ink-soft);
+  cursor: pointer;
+}
+
+.mini-tool-btn.text-danger {
+  color: #ef4444;
+  border-color: rgba(239, 68, 68, 0.4);
+}
+
+.batch-selected-count {
+  font-size: 11px;
+  color: var(--myext-ink-muted);
+  margin-left: auto;
+}
+
+.batch-books-scroll {
+  max-height: 38vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 2px;
+}
+
+.batch-book-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: var(--myext-radius-sm);
+  background: var(--myext-surface-2);
+  border: 1px solid var(--myext-line);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.batch-book-item.selected {
+  border-color: var(--myext-accent);
+  background: rgba(110, 150, 129, 0.1);
+}
+
+.batch-checkbox {
+  accent-color: var(--myext-accent);
+  width: 15px;
+  height: 15px;
+}
+
+.batch-book-name {
+  flex: 1 1 0%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.batch-delete-confirm-box {
+  padding-top: 6px;
+}
+
+.batch-danger-execute-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 36px;
+  border: none;
+  border-radius: var(--myext-radius-sm);
+  background: #ef4444;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.import-dropzone {
+  border: 2px dashed var(--myext-line);
+  border-radius: var(--myext-radius-sm);
+  padding: 24px 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  cursor: pointer;
+  text-align: center;
+  transition: all 0.2s;
+}
+
+.import-dropzone:hover {
+  border-color: var(--myext-accent);
+  background: rgba(110, 150, 129, 0.05);
+}
+
+.drop-icon {
+  font-size: 28px;
+  color: var(--myext-accent);
+}
+
+.drop-text {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--myext-ink);
+}
+
+.drop-subtext {
+  font-size: 11px;
+  color: var(--myext-ink-muted);
+}
+
+.batch-file-preview-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--myext-ink-soft);
+  font-weight: 500;
+}
+
+.file-names-scroll {
+  max-height: 130px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.file-preview-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  padding: 4px 8px;
+  background: var(--myext-surface-2);
+  border-radius: var(--myext-radius-sm);
+  border: 1px solid var(--myext-line);
+}
+
+.preview-filename {
+  flex: 1 1 0%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-filesize {
+  font-size: 11px;
+  color: var(--myext-ink-muted);
+  font-family: var(--myext-font-mono);
+}
+
+.batch-execute-import-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 36px;
+  border: none;
+  border-radius: var(--myext-radius-sm);
+  background: var(--myext-accent);
+  color: var(--myext-accent-ink);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  margin-top: 4px;
 }
 </style>

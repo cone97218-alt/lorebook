@@ -53,6 +53,7 @@ export interface UiState {
   editorShowRecursion: boolean;
   editorShowAutomation: boolean;
   showVectorized: boolean;
+  replaceNativeWorldBook: boolean;
 }
 
 const PAGE_STORAGE_KEY = 'st_fluent_lorebook.ui.page';
@@ -94,6 +95,7 @@ export const ui = reactive<UiState>({
   editorShowRecursion: extensionSettings.editorShowRecursion,
   editorShowAutomation: extensionSettings.editorShowAutomation,
   showVectorized: extensionSettings.showVectorized,
+  replaceNativeWorldBook: extensionSettings.replaceNativeWorldBook,
 });
 
 onSettingsReady(() => {
@@ -123,6 +125,7 @@ onSettingsReady(() => {
   ui.editorShowRecursion = extensionSettings.editorShowRecursion;
   ui.editorShowAutomation = extensionSettings.editorShowAutomation;
   ui.showVectorized = extensionSettings.showVectorized;
+  ui.replaceNativeWorldBook = extensionSettings.replaceNativeWorldBook;
 });
 
 watch(
@@ -153,6 +156,7 @@ watch(
     ui.editorShowRecursion,
     ui.editorShowAutomation,
     ui.showVectorized,
+    ui.replaceNativeWorldBook,
   ],
   () => {
     extensionSettings.theme = ui.theme;
@@ -181,6 +185,7 @@ watch(
     extensionSettings.editorShowRecursion = ui.editorShowRecursion;
     extensionSettings.editorShowAutomation = ui.editorShowAutomation;
     extensionSettings.showVectorized = ui.showVectorized;
+    extensionSettings.replaceNativeWorldBook = ui.replaceNativeWorldBook;
   },
   { deep: true },
 );

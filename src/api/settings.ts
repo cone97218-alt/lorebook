@@ -65,6 +65,7 @@ export interface ExtensionSettings {
   editorShowScanDepth: boolean;
   editorShowRecursion: boolean;
   editorShowAutomation: boolean;
+  replaceNativeWorldBook: boolean;
 }
 
 const SETTINGS_KEY = 'st_fluent_lorebook_settings';
@@ -98,6 +99,7 @@ export function defaultSettings(): ExtensionSettings {
     editorShowScanDepth: false,
     editorShowRecursion: true,
     editorShowAutomation: false,
+    replaceNativeWorldBook: false,
   };
 }
 
@@ -160,6 +162,7 @@ function normalize(raw: unknown): ExtensionSettings {
     editorShowScanDepth: typeof obj.editorShowScanDepth === 'boolean' ? obj.editorShowScanDepth : d.editorShowScanDepth,
     editorShowRecursion: typeof obj.editorShowRecursion === 'boolean' ? obj.editorShowRecursion : d.editorShowRecursion,
     editorShowAutomation: typeof obj.editorShowAutomation === 'boolean' ? obj.editorShowAutomation : d.editorShowAutomation,
+    replaceNativeWorldBook: typeof obj.replaceNativeWorldBook === 'boolean' ? obj.replaceNativeWorldBook : d.replaceNativeWorldBook,
   };
 }
 

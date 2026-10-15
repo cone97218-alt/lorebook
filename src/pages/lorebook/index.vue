@@ -12,12 +12,9 @@ onMounted(() => {
 <template>
   <div class="lorebook-page">
     <Transition name="page-slide" mode="out-in">
-      <div v-if="lorebookState.viewMode === 'list'" key="list" class="view-container">
-        <EntryList />
-      </div>
-      <div v-else key="editor" class="view-container">
-        <EntryEditor />
-      </div>
+      <KeepAlive>
+        <component :is="lorebookState.viewMode === 'list' ? EntryList : EntryEditor" :key="lorebookState.viewMode" />
+      </KeepAlive>
     </Transition>
   </div>
 </template>

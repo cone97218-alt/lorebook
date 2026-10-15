@@ -178,6 +178,59 @@ export async function deleteWorldBook(name: string): Promise<boolean> {
 }
 
 /**
+ * 批量删除多本世界书
+ */
+export async function batchDeleteWorldBooks(names: string[]): Promise<{ success: number; failed: number }> {
+  let success = 0;
+  let failed = 0;
+  for (const name of names) {
+    const ok = await deleteWorldBook(name);
+    if (ok) success++;
+    else failed++;
+  }
+  return { success, failed };
+}
+
+/**
+ * 从 JSON 对象或文本中解析世界书数据并保存
+ */
+export async function importWorldBookFromJson(name: string, content: string | object): Promise<boolean> {
+  const cleanName = name.trim();
+  if (!cleanName) return false;
+
+  let parsed: any;
+  if (typeof content === 'string') {
+    try {
+      parsed = JSON.parse(content);
+    } catch {
+      return false;
+    }
+  } else {
+    parsed = content;
+  }
+
+  let finalData: WorldInfoData;
+  if (parsed && typeof parsed === 'object') {
+    if (parsed.entries && typeof parsed.entries === 'object') {
+      finalData = parsed as WorldInfoData;
+    } else if (Array.isArray(parsed)) {
+      const entries: Record<string, any> = {};
+      parsed.forEach((item, index) => {
+        const uid = item.uid ?? index;
+        entries[uid] = { ...item, uid };
+      });
+      finalData = { entries };
+    } else {
+      finalData = { entries: {} };
+    }
+  } else {
+    return false;
+  }
+
+  return saveWorldBookData(cleanName, finalData);
+}
+
+/**
  * 重命名世界书：在新名称下写入数据，并移除旧世界书
  */
 export async function renameWorldBook(oldName: string, newName: string, data: WorldInfoData): Promise<boolean> {
