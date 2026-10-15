@@ -2091,8 +2091,6 @@ function handleExecuteBatchGroup() {
   cursor: pointer;
   transition: background-color 0.15s ease, border-color 0.15s ease;
   contain: layout style paint;
-  content-visibility: auto;
-  contain-intrinsic-size: 0 76px;
 }
 
 @media (hover: hover) {
@@ -2442,8 +2440,6 @@ function handleExecuteBatchGroup() {
   border-radius: var(--myext-radius);
   overflow: hidden;
   contain: layout style;
-  content-visibility: auto;
-  contain-intrinsic-size: 0 54px;
 }
 
 .group-header-row {
