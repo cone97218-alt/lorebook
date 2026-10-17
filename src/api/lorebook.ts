@@ -57,9 +57,62 @@ function getHeaders(): Record<string, string> {
 }
 
 /**
- * 获取所有世界书名称列表
+ * 宿主 SillyTavern world-info 原生模块的动态桥接
+ * 通过动态 import 加载酒馆原生 /scripts/world-info.js 模块，
+ * 直接操作酒馆内建的全局 worldInfoCache、selected_world_info、world_names 及编辑抽屉
+ */
+let hostWIModulePromise: Promise<any> | null = null;
+
+export async function getHostWorldInfo(): Promise<any> {
+  if (hostWIModulePromise) return hostWIModulePromise;
+  hostWIModulePromise = (async () => {
+    try {
+      const dynamicImport = new Function('url', 'return import(url)');
+      return await dynamicImport('/scripts/world-info.js');
+    } catch (err) {
+      console.warn('[Lorebook] Could not dynamically load /scripts/world-info.js', err);
+      return null;
+    }
+  })();
+  return hostWIModulePromise;
+}
+
+/**
+ * 插件自有内存缓存，避免重复网络请求与重复 JSON 序列化解析
+ */
+const bookDataMemoryCache = new Map<string, WorldInfoData>();
+
+export function getCachedWorldBookData(name: string): WorldInfoData | null {
+  if (!name) return null;
+  return bookDataMemoryCache.get(name) || null;
+}
+
+export function setCachedWorldBookData(name: string, data: WorldInfoData): void {
+  if (!name || !data) return;
+  bookDataMemoryCache.set(name, data);
+}
+
+export function invalidateWorldBookCache(name?: string): void {
+  if (name) {
+    bookDataMemoryCache.delete(name);
+  } else {
+    bookDataMemoryCache.clear();
+  }
+}
+
+/**
+ * 获取所有世界书名称列表（优先读取酒馆内存中的已就绪列表，实现 0ms 秒开）
  */
 export async function fetchWorldBookList(): Promise<string[]> {
+  try {
+    const hostWI = await getHostWorldInfo();
+    if (Array.isArray(hostWI?.world_names) && hostWI.world_names.length > 0) {
+      return [...hostWI.world_names];
+    }
+  } catch {
+    /* fallback to api */
+  }
+
   try {
     const res = await fetch('/api/worldinfo/list', {
       method: 'POST',
@@ -97,10 +150,36 @@ export async function fetchWorldBookList(): Promise<string[]> {
 }
 
 /**
- * 读取单本世界书的详细数据
+ * 读取单本世界书的详细数据（优先利用内存缓存与宿主缓存，无需每次打穿后端）
  */
-export async function fetchWorldBookData(name: string): Promise<WorldInfoData | null> {
+export async function fetchWorldBookData(name: string, force = false): Promise<WorldInfoData | null> {
   if (!name) return null;
+
+  if (!force) {
+    // 1. 优先从插件自有内存缓存返回
+    if (bookDataMemoryCache.has(name)) {
+      return bookDataMemoryCache.get(name)!;
+    }
+
+    // 2. 检查酒馆宿主原生的 in-memory worldInfoCache
+    try {
+      const hostWI = await getHostWorldInfo();
+      if (hostWI?.worldInfoCache?.has?.(name)) {
+        const cached = hostWI.worldInfoCache.get(name);
+        if (cached && typeof cached === 'object') {
+          if (!cached.entries || typeof cached.entries !== 'object') {
+            cached.entries = {};
+          }
+          bookDataMemoryCache.set(name, cached as WorldInfoData);
+          return cached as WorldInfoData;
+        }
+      }
+    } catch (err) {
+      console.debug('[Lorebook] Check host worldInfoCache failed:', err);
+    }
+  }
+
+  // 3. 网络请求加载
   try {
     const res = await fetch('/api/worldinfo/get', {
       method: 'POST',
@@ -114,32 +193,24 @@ export async function fetchWorldBookData(name: string): Promise<WorldInfoData | 
     if (!data.entries || typeof data.entries !== 'object') {
       data.entries = {};
     }
-    return data as WorldInfoData;
+    const result = data as WorldInfoData;
+    bookDataMemoryCache.set(name, result);
+
+    // 同步给宿主缓存
+    try {
+      const hostWI = await getHostWorldInfo();
+      if (hostWI?.worldInfoCache?.set) {
+        hostWI.worldInfoCache.set(name, result);
+      }
+    } catch {
+      /* ignore */
+    }
+
+    return result;
   } catch (err) {
     console.error(`[Lorebook] Failed to load worldbook: ${name}`, err);
     return null;
   }
-}
-
-/**
- * 宿主 SillyTavern world-info 原生模块的动态桥接
- * 通过动态 import 加载酒馆原生 /scripts/world-info.js 模块，
- * 直接操作酒馆内建的全局 worldInfoCache、selected_world_info、world_names 及编辑抽屉
- */
-let hostWIModulePromise: Promise<any> | null = null;
-
-export async function getHostWorldInfo(): Promise<any> {
-  if (hostWIModulePromise) return hostWIModulePromise;
-  hostWIModulePromise = (async () => {
-    try {
-      const dynamicImport = new Function('url', 'return import(url)');
-      return await dynamicImport('/scripts/world-info.js');
-    } catch (err) {
-      console.warn('[Lorebook] Could not dynamically load /scripts/world-info.js', err);
-      return null;
-    }
-  })();
-  return hostWIModulePromise;
 }
 
 /**
@@ -184,7 +255,8 @@ export async function saveWorldBookData(name: string, data: WorldInfoData): Prom
       if (!res.ok) return false;
     }
 
-    // 无论走哪条分支，都确保宿主 worldInfoCache 中存储的是纯净的 cleanData
+    // 无论走哪条分支，都确保宿主 worldInfoCache 与插件自有内存缓存中存储的是纯净的 cleanData
+    setCachedWorldBookData(name, cleanData);
     if (hostWI?.worldInfoCache?.set) {
       try {
         hostWI.worldInfoCache.delete?.(name);
@@ -294,7 +366,8 @@ export async function deleteWorldBook(name: string): Promise<boolean> {
       deleted = true;
     }
 
-    // 3. 内存与缓存强力清理 (确保原生不再留存)
+    // 3. 内存与缓存强力清理 (确保原生与插件自有缓存不再留存)
+    invalidateWorldBookCache(name);
     if (hostWI?.worldInfoCache?.delete) {
       try {
         hostWI.worldInfoCache.delete(name);

@@ -8,7 +8,7 @@ import { syncTopBarButton, initNativeWorldBookInterceptor } from '@/topbar';
 import { syncQuickReplyButton } from '@/quickReply';
 import { registerPublicInterface } from '@/public/register';
 import { ui } from '@/state/ui';
-import { lorebookState, selectWorldBook } from '@/state/lorebook';
+import { lorebookState, selectWorldBook, refreshBoundBooks } from '@/state/lorebook';
 import { versionedAssetUrl } from '@/version';
 
 // 样式打包
@@ -102,7 +102,13 @@ function bindLifecycleEvents(): void {
   const { eventSource: es, eventTypes: et } = ctx;
 
   es.on(et.CHAT_CHANGED, () => {
-    console.log('[MyExtension] 聊天已切换，重载数据');
+    refreshBoundBooks();
+    // 当角色卡切换时，如果处于角色卡作用域且当前角色绑定了世界书，平滑联动
+    if (lorebookState.bookScope === 'character' && lorebookState.boundBooks.character.length > 0) {
+      if (!lorebookState.boundBooks.character.includes(lorebookState.currentBook)) {
+        void selectWorldBook(lorebookState.boundBooks.character[0]);
+      }
+    }
   });
 
   es.on(et.USER_MESSAGE_RENDERED, () => {
@@ -116,7 +122,7 @@ function bindLifecycleEvents(): void {
   es.on(et.WORLDINFO_UPDATED, (bookName: string) => {
     if (bookName && lorebookState.currentBook === bookName) {
       if (!lorebookState.isSaving && !lorebookState.isDirty) {
-        void selectWorldBook(bookName, true);
+        void selectWorldBook(bookName, true, true);
       }
     }
   });

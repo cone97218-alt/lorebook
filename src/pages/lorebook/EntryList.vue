@@ -413,7 +413,7 @@ function handleExecuteBatchGroup() {
       <!-- 世界书选择与管理操作 -->
       <div class="book-selector-row">
         <div class="select-wrapper">
-          <i class="fa-solid fa-book-bookmark book-icon"></i>
+          <i :class="(lorebookState.isLoadingData || lorebookState.isLoadingBooks) ? 'fa-solid fa-circle-notch fa-spin book-icon' : 'fa-solid fa-book-bookmark book-icon'"></i>
           <select
             :value="lorebookState.currentBook"
             @change="onBookChange"
@@ -607,7 +607,7 @@ function handleExecuteBatchGroup() {
 
     <!-- 主展示区 -->
     <main ref="entriesScrollArea" class="entries-scroll-area" @scroll="onScroll">
-      <div v-if="lorebookState.isLoadingData" class="state-icon-box">
+      <div v-if="lorebookState.isLoadingData && !lorebookState.bookData" class="state-icon-box">
         <i class="fa-solid fa-circle-notch fa-spin"></i>
       </div>
 

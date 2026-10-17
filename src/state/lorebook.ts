@@ -9,6 +9,7 @@ import {
   importWorldBookFromJson,
   renameWorldBook,
   getBoundWorldBooks,
+  getCachedWorldBookData,
   createEntryTemplate,
   getFreeUid,
   type WorldInfoData,
@@ -392,17 +393,49 @@ export async function loadWorldBooks(forceReloadCurrent = false): Promise<void> 
         await selectWorldBook(target);
       }
     } else if (forceReloadCurrent && lorebookState.currentBook) {
-      await selectWorldBook(lorebookState.currentBook, true);
+      await selectWorldBook(lorebookState.currentBook, true, true);
     }
   } finally {
     lorebookState.isLoadingBooks = false;
   }
 }
 
+function applyWorldBookData(data: WorldInfoData, name: string, keepActiveUid: boolean, prevActiveUid: number | null): void {
+  const localGroups = loadGroupStorage(name);
+  for (const [uidStr, entry] of Object.entries(data.entries)) {
+    const uid = Number(uidStr);
+    const extGroup = (entry as any).extensions?.group;
+    const localGrp = localGroups[uid];
+    if (!entry.group && (extGroup || localGrp)) {
+      entry.group = extGroup || localGrp || '';
+    }
+    if (entry.group) {
+      if (!entry.extensions) entry.extensions = {};
+      (entry.extensions as any).group = entry.group;
+    }
+  }
+  lorebookState.bookData = data;
+  const uids = Object.keys(data.entries).map(Number);
+  if (keepActiveUid && prevActiveUid !== null && uids.includes(prevActiveUid)) {
+    lorebookState.activeUid = prevActiveUid;
+  } else if (uids.length > 0) {
+    lorebookState.activeUid = uids[0];
+  }
+}
+
 /**
- * 切换或重载选中的世界书
+ * 切换或重载选中的世界书（支持内存即时呈现，避免卸载DOM与滚动跳动）
  */
-export async function selectWorldBook(name: string, keepActiveUid = false): Promise<void> {
+export async function selectWorldBook(name: string, keepActiveUid = false, forceReload = false): Promise<void> {
+  if (!name) return;
+
+  // 1. 如果已处于当前世界书且已有数据，且非强制重载，则直接刷新绑定与快照后返回，0ms即时响应
+  if (!forceReload && lorebookState.currentBook === name && lorebookState.bookData) {
+    refreshBoundBooks();
+    refreshSnapshots();
+    return;
+  }
+
   if (lorebookState.isDirty && lorebookState.currentBook) {
     await saveImmediately();
   }
@@ -410,7 +443,6 @@ export async function selectWorldBook(name: string, keepActiveUid = false): Prom
   const prevActiveUid = lorebookState.activeUid;
   lorebookState.currentBook = name;
   localStorage.setItem(LAST_BOOK_STORAGE_KEY, name);
-  lorebookState.isLoadingData = true;
   if (!keepActiveUid) {
     lorebookState.activeUid = null;
   }
@@ -420,31 +452,23 @@ export async function selectWorldBook(name: string, keepActiveUid = false): Prom
   refreshSnapshots();
   refreshBoundBooks();
 
+  // 2. 检查内存缓存是否有现成数据，有则零延迟立即呈现
+  const cached = getCachedWorldBookData(name);
+  if (cached && !forceReload) {
+    applyWorldBookData(cached, name, keepActiveUid, prevActiveUid);
+    lorebookState.isLoadingData = false;
+    return;
+  }
+
+  // 3. 仅在首次无任何数据时才展示全局加载态，避免已有列表被反复清空造成视觉跳动
+  if (!lorebookState.bookData) {
+    lorebookState.isLoadingData = true;
+  }
+
   try {
-    const data = await fetchWorldBookData(name);
+    const data = await fetchWorldBookData(name, forceReload);
     if (data) {
-      const localGroups = loadGroupStorage(name);
-      for (const [uidStr, entry] of Object.entries(data.entries)) {
-        const uid = Number(uidStr);
-        const extGroup = (entry as any).extensions?.group;
-        const localGrp = localGroups[uid];
-        if (!entry.group && (extGroup || localGrp)) {
-          entry.group = extGroup || localGrp || '';
-        }
-        if (entry.group) {
-          if (!entry.extensions) entry.extensions = {};
-          (entry.extensions as any).group = entry.group;
-        }
-      }
-    }
-    lorebookState.bookData = data;
-    if (data) {
-      const uids = Object.keys(data.entries).map(Number);
-      if (keepActiveUid && prevActiveUid !== null && uids.includes(prevActiveUid)) {
-        lorebookState.activeUid = prevActiveUid;
-      } else if (uids.length > 0) {
-        lorebookState.activeUid = uids[0];
-      }
+      applyWorldBookData(data, name, keepActiveUid, prevActiveUid);
     }
   } finally {
     lorebookState.isLoadingData = false;

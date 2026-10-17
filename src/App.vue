@@ -156,9 +156,9 @@ const windowStyle = computed(() => {
 
           <!-- 内容主体 -->
           <main class="myext-body">
-            <Transition name="myext-fade" mode="out-in">
+            <KeepAlive>
               <component :is="current.component" :key="current.id" />
-            </Transition>
+            </KeepAlive>
           </main>
         </div>
       </div>
