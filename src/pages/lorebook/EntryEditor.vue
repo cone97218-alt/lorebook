@@ -608,15 +608,39 @@ function handleTouchStart(e: TouchEvent) {
   }
 }
 
+function handleTouchCancel() {
+  touchStartX = 0;
+  touchStartY = 0;
+}
+
 function handleTouchEnd(e: TouchEvent) {
-  if (e.changedTouches.length === 1) {
+  if (e.changedTouches.length === 1 && touchStartX > 0) {
     const deltaX = e.changedTouches[0].clientX - touchStartX;
     const deltaY = e.changedTouches[0].clientY - touchStartY;
-    // 右滑退出返回列表 (滑动距离 > 60px 且主要为水平手势)
-    if (deltaX > 60 && Math.abs(deltaX) > Math.abs(deltaY) * 1.5) {
-      const target = e.target as HTMLElement | null;
-      if (target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA') return;
-      if (target?.closest('.symbol-bar, .symbols-scroll-area, .keyword-chips-row, .accessories-wrapper')) return;
+    const startX = touchStartX;
+    touchStartX = 0;
+    touchStartY = 0;
+
+    // 排除特定组件的内部水平拖拽
+    const target = e.target as HTMLElement | null;
+    if (target?.tagName === 'INPUT' && (target as HTMLInputElement).type === 'range') return;
+    if (target?.closest('.symbol-accessory-bar, .key-chips-flow, .drawer-range')) return;
+
+    // 若在正文文本域中有选区文本，避免打断用户的划词操作
+    if (target?.tagName === 'TEXTAREA') {
+      const ta = target as HTMLTextAreaElement;
+      if (ta.selectionStart !== ta.selectionEnd) return;
+    }
+
+    // 1. 边缘右滑手势（从屏幕左侧 <= 80px 开始）：极其灵敏，阈值 40px
+    const isEdgeSwipe = startX <= 80 && deltaX > 40 && deltaX > Math.abs(deltaY) * 1.2;
+    // 2. 屏幕内右滑（正文等区域）：滑动距离 > 65px 且明确为水平手势
+    const isNormalSwipe = deltaX > 65 && deltaX > Math.abs(deltaY) * 1.5;
+
+    if (isEdgeSwipe || isNormalSwipe) {
+      if (document.activeElement instanceof HTMLElement) {
+        document.activeElement.blur();
+      }
       handleBackClick();
     }
   }
@@ -652,7 +676,12 @@ onDeactivated(() => {
 </script>
 
 <template>
-  <div class="editor-pane" @touchstart="handleTouchStart" @touchend="handleTouchEnd">
+  <div
+    class="editor-pane"
+    @touchstart.passive="handleTouchStart"
+    @touchend="handleTouchEnd"
+    @touchcancel="handleTouchCancel"
+  >
     <div v-if="!activeEntry" class="empty-view">
       <i class="fa-solid fa-pen-ruler empty-icon"></i>
       <button class="icon-btn" @click="handleBackClick">

@@ -66,9 +66,10 @@ const fontSizes: { id: FontSize; label: string }[] = [
 
 // 自动存盘模式
 const saveModes: { id: AutoSaveMode; label: string; desc: string }[] = [
-  { id: 'blur', label: '离焦存盘', desc: '收起键盘或离开输入框时保存，打字过程零打扰' },
+  { id: 'exit', label: '离页存盘 (推荐)', desc: '仅在离开词条详情页或关闭面板时保存，编辑期间零卡顿' },
+  { id: 'blur', label: '离焦存盘', desc: '收起键盘或离开输入框时保存' },
   { id: 'idle', label: '停笔存盘', desc: '停止打字经过防抖延迟后自动保存' },
-  { id: 'manual', label: '手动存盘', desc: '仅点击保存按钮或快捷键触发保存' },
+  { id: 'manual', label: '手动存盘', desc: '仅在退出详情页或快捷键时触发保存' },
 ];
 
 // 自定义符号输入

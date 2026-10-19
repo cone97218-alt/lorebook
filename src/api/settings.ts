@@ -16,7 +16,7 @@ export type PanelPosition = 'center' | 'bottom' | 'top' | 'fullscreen';
 export type PanelHeight = 'compact' | 'medium' | 'large' | 'full';
 export type FontSize = 'sm' | 'md' | 'lg' | 'xl';
 export type FontFamily = 'sans' | 'mono';
-export type AutoSaveMode = 'idle' | 'blur' | 'manual';
+export type AutoSaveMode = 'exit' | 'idle' | 'blur' | 'manual';
 
 export interface CustomSymbol {
   id: string;
@@ -81,7 +81,7 @@ export function defaultSettings(): ExtensionSettings {
     showSymbolBar: true,
     customSymbols: JSON.parse(JSON.stringify(DEFAULT_SYMBOLS)),
     autoSave: true,
-    autoSaveMode: 'idle',
+    autoSaveMode: 'exit',
     autoSaveDelay: 3000,
     showTopBar: false,
     showQuickReply: false,
@@ -124,7 +124,7 @@ function normalize(raw: unknown): ExtensionSettings {
   const validHeights: PanelHeight[] = ['compact', 'medium', 'large', 'full'];
   const validFontSizes: FontSize[] = ['sm', 'md', 'lg', 'xl'];
   const validFontFamilies: FontFamily[] = ['sans', 'mono'];
-  const validSaveModes: AutoSaveMode[] = ['idle', 'blur', 'manual'];
+  const validSaveModes: AutoSaveMode[] = ['exit', 'idle', 'blur', 'manual'];
 
   const customSymbols = Array.isArray(obj.customSymbols) && obj.customSymbols.length > 0
     ? obj.customSymbols.map((s, i) => ({

@@ -133,6 +133,7 @@ export const lorebookState = reactive({
   isSaving: false,
   isDirty: false,
   lastSavedTime: null as string | null,
+  saveFeedback: null as 'saving' | 'saved' | 'error' | null,
   fontSize: 'md' as FontSize,
   zenMode: false,
   showAdvanced: false,
@@ -704,9 +705,9 @@ export function markDirty(): void {
  * 离开输入框/收起键盘时的离焦保存
  */
 export function handleBlurSave(): void {
-  if (ui.autoSave && (ui.autoSaveMode === 'blur' || ui.autoSaveMode === 'idle')) {
+  if (ui.autoSave && ui.autoSaveMode === 'blur') {
     if (lorebookState.isDirty && !lorebookState.isSaving) {
-      void saveImmediately();
+      void saveImmediately(false);
     }
   }
 }
@@ -721,10 +722,12 @@ export function unregisterEditorFlush(): void {
   editorFlushCallback = null;
 }
 
+let feedbackTimer: ReturnType<typeof setTimeout> | null = null;
+
 /**
  * 立即保存世界书
  */
-export async function saveImmediately(): Promise<boolean> {
+export async function saveImmediately(showIndicator = true): Promise<boolean> {
   if (saveTimer) {
     clearTimeout(saveTimer);
     saveTimer = null;
@@ -745,6 +748,14 @@ export async function saveImmediately(): Promise<boolean> {
   }
 
   lorebookState.isSaving = true;
+  if (showIndicator) {
+    if (feedbackTimer) {
+      clearTimeout(feedbackTimer);
+      feedbackTimer = null;
+    }
+    lorebookState.saveFeedback = 'saving';
+  }
+
   try {
     for (const entry of Object.values(lorebookState.bookData.entries)) {
       if (entry.group !== undefined) {
@@ -760,6 +771,22 @@ export async function saveImmediately(): Promise<boolean> {
       const now = new Date();
       const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
       lorebookState.lastSavedTime = timeStr;
+
+      if (showIndicator) {
+        lorebookState.saveFeedback = 'saved';
+        feedbackTimer = setTimeout(() => {
+          lorebookState.saveFeedback = null;
+          feedbackTimer = null;
+        }, 1800);
+      }
+    } else {
+      if (showIndicator) {
+        lorebookState.saveFeedback = 'error';
+        feedbackTimer = setTimeout(() => {
+          lorebookState.saveFeedback = null;
+          feedbackTimer = null;
+        }, 2500);
+      }
     }
     return ok;
   } finally {
