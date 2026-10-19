@@ -222,6 +222,13 @@ export function onAppClose(hook: CloseAppHook): () => void {
 }
 
 export function closeApp(): void {
+  if (document.activeElement instanceof HTMLElement) {
+    try {
+      document.activeElement.blur();
+    } catch {
+      /* ignore */
+    }
+  }
   for (const hook of closeAppHooks) {
     try {
       hook();

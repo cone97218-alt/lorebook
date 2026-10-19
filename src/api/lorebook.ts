@@ -251,6 +251,7 @@ export async function saveWorldBookData(name: string, data: WorldInfoData): Prom
         method: 'POST',
         headers: getHeaders(),
         body: JSON.stringify({ name, data: cleanData }),
+        keepalive: true,
       });
       if (!res.ok) return false;
     }

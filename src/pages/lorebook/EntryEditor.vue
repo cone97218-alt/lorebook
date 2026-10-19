@@ -12,7 +12,7 @@ import {
 } from '@/state/lorebook';
 import type { WorldInfoEntry } from '@/api/lorebook';
 import { toast } from '@/st/toast';
-import { ui } from '@/state/ui';
+import { ui, onAppClose } from '@/state/ui';
 
 const contentTextarea = ref<HTMLTextAreaElement | null>(null);
 
@@ -193,8 +193,13 @@ watch(
   { immediate: true },
 );
 
+let unbindAppClose: (() => void) | null = null;
+
 onMounted(() => {
   registerEditorFlush(flushAllSync);
+  unbindAppClose = onAppClose(() => {
+    flushAllSync();
+  });
   currentTargetEntry = activeEntry.value;
   isDirtyTitle = false;
   isDirtyContent = false;
@@ -660,17 +665,21 @@ function onTextareaBlur() {
 }
 
 onUnmounted(() => {
+  if (unbindAppClose) {
+    unbindAppClose();
+    unbindAppClose = null;
+  }
   flushAllSync();
   unregisterEditorFlush();
-  if (lorebookState.isDirty && !lorebookState.isSaving) {
-    void saveImmediately();
+  if (lorebookState.isDirty) {
+    void saveImmediately(false);
   }
 });
 
 onDeactivated(() => {
   flushAllSync();
-  if (lorebookState.isDirty && !lorebookState.isSaving) {
-    void saveImmediately();
+  if (lorebookState.isDirty) {
+    void saveImmediately(false);
   }
 });
 </script>

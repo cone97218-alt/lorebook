@@ -162,13 +162,85 @@ watch(
 );
 
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
+let editorFlushCallback: (() => void) | null = null;
 
-// 当用户关闭/收起拓展面板时，若有未保存的脏数据立即强制落盘并热同步至酒馆
+export function registerEditorFlush(fn: () => void): void {
+  editorFlushCallback = fn;
+}
+
+export function unregisterEditorFlush(): void {
+  editorFlushCallback = null;
+}
+
+// 当用户关闭/收起拓展面板时，先冲刷编辑器未落盘内容，若有脏数据立即强制落盘并热同步至酒馆
 onAppClose(() => {
-  if (lorebookState.isDirty && !lorebookState.isSaving) {
-    void saveImmediately();
+  if (editorFlushCallback) {
+    try {
+      editorFlushCallback();
+    } catch (err) {
+      console.warn('[Lorebook] editorFlushCallback error on app close:', err);
+    }
+  }
+  if (lorebookState.isDirty) {
+    void saveImmediately(false);
+  }
+  if (lorebookState.viewMode === 'editor') {
+    lorebookState.viewMode = 'list';
   }
 });
+
+// 监听面板显隐：当面板被关闭时，双保险确保任何未保存内容落盘，并重置编辑态回列表
+watch(
+  () => ui.open,
+  isOpen => {
+    if (!isOpen) {
+      if (editorFlushCallback) {
+        try {
+          editorFlushCallback();
+        } catch {
+          /* ignore */
+        }
+      }
+      if (lorebookState.isDirty) {
+        void saveImmediately(false);
+      }
+      if (lorebookState.viewMode === 'editor') {
+        lorebookState.viewMode = 'list';
+      }
+    }
+  },
+);
+
+// 浏览器切后台或页面关闭时的多层安全落盘保障
+if (typeof window !== 'undefined') {
+  window.addEventListener('beforeunload', () => {
+    if (editorFlushCallback) {
+      try {
+        editorFlushCallback();
+      } catch {
+        /* ignore */
+      }
+    }
+    if (lorebookState.isDirty && lorebookState.currentBook && lorebookState.bookData) {
+      void saveImmediately(false);
+    }
+  });
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') {
+      if (editorFlushCallback) {
+        try {
+          editorFlushCallback();
+        } catch {
+          /* ignore */
+        }
+      }
+      if (lorebookState.isDirty) {
+        void saveImmediately(false);
+      }
+    }
+  });
+}
 
 export const activeEntry = computed<WorldInfoEntry | null>(() => {
   if (!lorebookState.bookData || lorebookState.activeUid === null) return null;
@@ -710,16 +782,6 @@ export function handleBlurSave(): void {
       void saveImmediately(false);
     }
   }
-}
-
-let editorFlushCallback: (() => void) | null = null;
-
-export function registerEditorFlush(fn: () => void): void {
-  editorFlushCallback = fn;
-}
-
-export function unregisterEditorFlush(): void {
-  editorFlushCallback = null;
 }
 
 let feedbackTimer: ReturnType<typeof setTimeout> | null = null;
