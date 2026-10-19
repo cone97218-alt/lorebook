@@ -213,11 +213,14 @@ export async function fetchWorldBookData(name: string, force = false): Promise<W
   }
 }
 
+export let lastInternalSaveTime = 0;
+
 /**
  * 保存世界书并通知 ST 宿主刷新缓存与事件
  */
 export async function saveWorldBookData(name: string, data: WorldInfoData): Promise<boolean> {
   if (!name || !data) return false;
+  lastInternalSaveTime = Date.now();
   try {
     const ctx = getContext();
     const hostWI = await getHostWorldInfo();

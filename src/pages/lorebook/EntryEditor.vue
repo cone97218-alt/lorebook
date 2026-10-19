@@ -92,16 +92,14 @@ function flushTitleSync() {
     clearTimeout(titleIdleTimer);
     titleIdleTimer = null;
   }
-  // 未曾编辑过标题或没有绑定条目时，坚决不向任何对象写值
-  if (!isDirtyTitle || !currentTargetEntry) return;
-  if (titleInputRef.value) {
-    const val = titleInputRef.value.value;
-    if (currentTargetEntry.comment !== val) {
-      currentTargetEntry.comment = val;
-      markDirty();
-    }
-    isDirtyTitle = false;
+  const entry = currentTargetEntry || activeEntry.value;
+  if (!entry || !titleInputRef.value) return;
+  const val = titleInputRef.value.value;
+  if (entry.comment !== val) {
+    entry.comment = val;
+    markDirty();
   }
+  isDirtyTitle = false;
 }
 
 // 统计信息（仅在打开词条或失焦时计算，打字期间绝不耗费任何 CPU）
@@ -124,16 +122,14 @@ function flushContentSync() {
     clearTimeout(contentIdleTimer);
     contentIdleTimer = null;
   }
-  // 未曾编辑过正文或没有绑定条目时，坚决不向任何对象写值
-  if (!isDirtyContent || !currentTargetEntry) return;
-  if (contentTextarea.value) {
-    const curVal = contentTextarea.value.value;
-    if (currentTargetEntry.content !== curVal) {
-      currentTargetEntry.content = curVal;
-      markDirty();
-    }
-    isDirtyContent = false;
+  const entry = currentTargetEntry || activeEntry.value;
+  if (!entry || !contentTextarea.value) return;
+  const curVal = contentTextarea.value.value;
+  if (entry.content !== curVal) {
+    entry.content = curVal;
+    markDirty();
   }
+  isDirtyContent = false;
 }
 
 function flushAllSync() {
@@ -147,6 +143,8 @@ function onCompositionStart() {
 
 function onCompositionEnd() {
   isComposing = false;
+  // 输入法选词完成，立即触发内容变更同步并调度后台落盘
+  onContentInput();
 }
 
 // 输入正文：纯原生 DOM 接管，打字期间零 JS 干扰
@@ -161,14 +159,15 @@ function onContentInput() {
 }
 
 function syncActiveEntryToDom() {
-  if (currentTargetEntry) {
+  const entry = currentTargetEntry || activeEntry.value;
+  if (entry) {
     if (titleInputRef.value) {
-      titleInputRef.value.value = currentTargetEntry.comment || '';
+      titleInputRef.value.value = entry.comment || '';
     }
     if (contentTextarea.value) {
-      contentTextarea.value.value = currentTargetEntry.content || '';
+      contentTextarea.value.value = entry.content || '';
     }
-    updateStats(currentTargetEntry.content || '');
+    updateStats(entry.content || '');
   }
 }
 
@@ -186,6 +185,7 @@ watch(
     isDirtyContent = false;
 
     // 3. 将新条目的纯净内容装载至 DOM
+    syncActiveEntryToDom();
     nextTick(() => {
       syncActiveEntryToDom();
     });
@@ -203,6 +203,7 @@ onMounted(() => {
   currentTargetEntry = activeEntry.value;
   isDirtyTitle = false;
   isDirtyContent = false;
+  syncActiveEntryToDom();
   nextTick(() => {
     syncActiveEntryToDom();
   });
@@ -671,14 +672,14 @@ onUnmounted(() => {
   }
   flushAllSync();
   unregisterEditorFlush();
-  if (lorebookState.isDirty) {
+  if (lorebookState.isDirty || lorebookState.isSaving) {
     void saveImmediately(false);
   }
 });
 
 onDeactivated(() => {
   flushAllSync();
-  if (lorebookState.isDirty) {
+  if (lorebookState.isDirty || lorebookState.isSaving) {
     void saveImmediately(false);
   }
 });

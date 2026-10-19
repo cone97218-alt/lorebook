@@ -181,7 +181,7 @@ onAppClose(() => {
       console.warn('[Lorebook] editorFlushCallback error on app close:', err);
     }
   }
-  if (lorebookState.isDirty) {
+  if (lorebookState.isDirty || lorebookState.isSaving) {
     void saveImmediately(false);
   }
   if (lorebookState.viewMode === 'editor') {
@@ -201,7 +201,7 @@ watch(
           /* ignore */
         }
       }
-      if (lorebookState.isDirty) {
+      if (lorebookState.isDirty || lorebookState.isSaving) {
         void saveImmediately(false);
       }
       if (lorebookState.viewMode === 'editor') {
@@ -562,8 +562,15 @@ export function openEntry(uid: number): void {
  * 关闭编辑器（返回列表）
  */
 export function closeEditor(): void {
-  if (lorebookState.isDirty && !lorebookState.isSaving) {
-    void saveImmediately();
+  if (editorFlushCallback) {
+    try {
+      editorFlushCallback();
+    } catch (err) {
+      console.warn('[Lorebook] editorFlushCallback error in closeEditor:', err);
+    }
+  }
+  if (lorebookState.isDirty || lorebookState.isSaving) {
+    void saveImmediately(true);
   }
   lorebookState.viewMode = 'list';
 }
@@ -785,9 +792,12 @@ export function handleBlurSave(): void {
 }
 
 let feedbackTimer: ReturnType<typeof setTimeout> | null = null;
+let savePromise: Promise<boolean> | null = null;
+let needsReSave = false;
+let reSaveShowIndicator = false;
 
 /**
- * 立即保存世界书
+ * 立即保存世界书（带并发串行队列保护与防竞态设计）
  */
 export async function saveImmediately(showIndicator = true): Promise<boolean> {
   if (saveTimer) {
@@ -795,7 +805,7 @@ export async function saveImmediately(showIndicator = true): Promise<boolean> {
     saveTimer = null;
   }
 
-  // 若编辑器中有尚未同步进响应式对象的脏输入，立即将其刷入正文再落盘
+  // 1. 若编辑器中有尚未同步进响应式对象的脏输入，立即将其刷入正文再落盘
   if (editorFlushCallback) {
     try {
       editorFlushCallback();
@@ -809,8 +819,8 @@ export async function saveImmediately(showIndicator = true): Promise<boolean> {
     return false;
   }
 
-  lorebookState.isSaving = true;
   if (showIndicator) {
+    reSaveShowIndicator = true;
     if (feedbackTimer) {
       clearTimeout(feedbackTimer);
       feedbackTimer = null;
@@ -818,42 +828,74 @@ export async function saveImmediately(showIndicator = true): Promise<boolean> {
     lorebookState.saveFeedback = 'saving';
   }
 
-  try {
-    for (const entry of Object.values(lorebookState.bookData.entries)) {
-      if (entry.group !== undefined) {
-        if (!entry.extensions) entry.extensions = {};
-        (entry.extensions as any).group = entry.group || '';
-      }
-    }
-    saveGroupStorage(lorebookState.currentBook, lorebookState.bookData);
-
-    const ok = await saveWorldBookData(lorebookState.currentBook, lorebookState.bookData);
-    if (ok) {
-      lorebookState.isDirty = false;
-      const now = new Date();
-      const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
-      lorebookState.lastSavedTime = timeStr;
-
-      if (showIndicator) {
-        lorebookState.saveFeedback = 'saved';
-        feedbackTimer = setTimeout(() => {
-          lorebookState.saveFeedback = null;
-          feedbackTimer = null;
-        }, 1800);
-      }
-    } else {
-      if (showIndicator) {
-        lorebookState.saveFeedback = 'error';
-        feedbackTimer = setTimeout(() => {
-          lorebookState.saveFeedback = null;
-          feedbackTimer = null;
-        }, 2500);
-      }
-    }
-    return ok;
-  } finally {
-    lorebookState.isSaving = false;
+  // 2. 若已有保存网络请求在传输中，标记 needsReSave 并复用Promise，绝不丢弃最新输入与并发请求
+  if (savePromise) {
+    needsReSave = true;
+    return savePromise;
   }
+
+  savePromise = (async () => {
+    try {
+      while (true) {
+        needsReSave = false;
+        lorebookState.isSaving = true;
+        const currentShowIndicator = showIndicator || reSaveShowIndicator;
+        reSaveShowIndicator = false;
+
+        // 每次循环执行时再次冲刷可能刚刚输入的最新内容
+        if (editorFlushCallback) {
+          try {
+            editorFlushCallback();
+          } catch {
+            /* ignore */
+          }
+        }
+
+        for (const entry of Object.values(lorebookState.bookData!.entries)) {
+          if (entry.group !== undefined) {
+            if (!entry.extensions) entry.extensions = {};
+            (entry.extensions as any).group = entry.group || '';
+          }
+        }
+        saveGroupStorage(lorebookState.currentBook!, lorebookState.bookData!);
+
+        const ok = await saveWorldBookData(lorebookState.currentBook!, lorebookState.bookData!);
+
+        // 保存完成时，若保存期间没有产生新的修改：
+        if (!needsReSave) {
+          if (ok) {
+            lorebookState.isDirty = false;
+            const now = new Date();
+            const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
+            lorebookState.lastSavedTime = timeStr;
+
+            if (currentShowIndicator) {
+              lorebookState.saveFeedback = 'saved';
+              feedbackTimer = setTimeout(() => {
+                lorebookState.saveFeedback = null;
+                feedbackTimer = null;
+              }, 1800);
+            }
+          } else {
+            if (currentShowIndicator) {
+              lorebookState.saveFeedback = 'error';
+              feedbackTimer = setTimeout(() => {
+                lorebookState.saveFeedback = null;
+                feedbackTimer = null;
+              }, 2500);
+            }
+          }
+          return ok;
+        }
+        // 如果在网络请求期间产生了新的排队修改，循环继续下一次保存
+      }
+    } finally {
+      lorebookState.isSaving = false;
+      savePromise = null;
+    }
+  })();
+
+  return savePromise;
 }
 
 /**

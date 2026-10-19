@@ -9,6 +9,7 @@ import { syncQuickReplyButton } from '@/quickReply';
 import { registerPublicInterface } from '@/public/register';
 import { ui } from '@/state/ui';
 import { lorebookState, selectWorldBook, refreshBoundBooks } from '@/state/lorebook';
+import { lastInternalSaveTime } from '@/api/lorebook';
 import { versionedAssetUrl } from '@/version';
 
 // 样式打包
@@ -120,6 +121,10 @@ function bindLifecycleEvents(): void {
   });
 
   es.on(et.WORLDINFO_UPDATED, (bookName: string) => {
+    // 若在 3 秒内刚刚由本插件自身完成保存，内存中状态完全最新，跳过重复拉取与后端竞态覆盖
+    if (Date.now() - lastInternalSaveTime < 3000) {
+      return;
+    }
     if (bookName && lorebookState.currentBook === bookName) {
       if (!lorebookState.isSaving && !lorebookState.isDirty) {
         void selectWorldBook(bookName, true, true);
