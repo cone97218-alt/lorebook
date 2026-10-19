@@ -7,7 +7,10 @@ import {
   handleBlurSave,
   saveImmediately,
   closeEditor,
+  registerEditorFlush,
+  unregisterEditorFlush,
 } from '@/state/lorebook';
+import type { WorldInfoEntry } from '@/api/lorebook';
 import { toast } from '@/st/toast';
 import { ui } from '@/state/ui';
 
@@ -66,7 +69,13 @@ let titleIdleTimer: ReturnType<typeof setTimeout> | null = null;
 let contentIdleTimer: ReturnType<typeof setTimeout> | null = null;
 let isComposing = false;
 
+// 严格绑定当前正处于编辑中的条目实例与输入脏标记，坚决杜绝跨条目/跨世界书数据相互覆盖
+let currentTargetEntry: WorldInfoEntry | null = null;
+let isDirtyTitle = false;
+let isDirtyContent = false;
+
 function onCommentInput() {
+  isDirtyTitle = true;
   if (titleIdleTimer) clearTimeout(titleIdleTimer);
   titleIdleTimer = setTimeout(() => {
     flushTitleSync();
@@ -83,12 +92,15 @@ function flushTitleSync() {
     clearTimeout(titleIdleTimer);
     titleIdleTimer = null;
   }
-  if (titleInputRef.value && activeEntry.value) {
+  // 未曾编辑过标题或没有绑定条目时，坚决不向任何对象写值
+  if (!isDirtyTitle || !currentTargetEntry) return;
+  if (titleInputRef.value) {
     const val = titleInputRef.value.value;
-    if (activeEntry.value.comment !== val) {
-      activeEntry.value.comment = val;
+    if (currentTargetEntry.comment !== val) {
+      currentTargetEntry.comment = val;
       markDirty();
     }
+    isDirtyTitle = false;
   }
 }
 
@@ -112,12 +124,15 @@ function flushContentSync() {
     clearTimeout(contentIdleTimer);
     contentIdleTimer = null;
   }
-  if (contentTextarea.value && activeEntry.value) {
+  // 未曾编辑过正文或没有绑定条目时，坚决不向任何对象写值
+  if (!isDirtyContent || !currentTargetEntry) return;
+  if (contentTextarea.value) {
     const curVal = contentTextarea.value.value;
-    if (activeEntry.value.content !== curVal) {
-      activeEntry.value.content = curVal;
+    if (currentTargetEntry.content !== curVal) {
+      currentTargetEntry.content = curVal;
       markDirty();
     }
+    isDirtyContent = false;
   }
 }
 
@@ -137,6 +152,7 @@ function onCompositionEnd() {
 // 输入正文：纯原生 DOM 接管，打字期间零 JS 干扰
 function onContentInput() {
   if (isComposing) return;
+  isDirtyContent = true;
   // 宽松的 3 秒空闲同步（用户停笔 3 秒后才在后台同步进状态）
   if (contentIdleTimer) clearTimeout(contentIdleTimer);
   contentIdleTimer = setTimeout(() => {
@@ -145,21 +161,31 @@ function onContentInput() {
 }
 
 function syncActiveEntryToDom() {
-  if (activeEntry.value) {
-    if (titleInputRef.value && titleInputRef.value.value !== (activeEntry.value.comment || '')) {
-      titleInputRef.value.value = activeEntry.value.comment || '';
+  if (currentTargetEntry) {
+    if (titleInputRef.value) {
+      titleInputRef.value.value = currentTargetEntry.comment || '';
     }
-    if (contentTextarea.value && contentTextarea.value.value !== (activeEntry.value.content || '')) {
-      contentTextarea.value.value = activeEntry.value.content || '';
+    if (contentTextarea.value) {
+      contentTextarea.value.value = currentTargetEntry.content || '';
     }
-    updateStats(activeEntry.value.content || '');
+    updateStats(currentTargetEntry.content || '');
   }
 }
 
 watch(
-  () => activeEntry.value?.uid,
-  () => {
+  [() => lorebookState.currentBook, () => activeEntry.value?.uid],
+  ([newBook, newUid], [oldBook, oldUid]) => {
+    if (newBook === oldBook && newUid === oldUid) return;
+
+    // 1. 如果之前有正在编辑的条目且有未刷新的脏输入，先将变更写入旧条目
     flushAllSync();
+
+    // 2. 将当前编辑目标指向新的条目并重置脏标记
+    currentTargetEntry = activeEntry.value;
+    isDirtyTitle = false;
+    isDirtyContent = false;
+
+    // 3. 将新条目的纯净内容装载至 DOM
     nextTick(() => {
       syncActiveEntryToDom();
     });
@@ -168,6 +194,10 @@ watch(
 );
 
 onMounted(() => {
+  registerEditorFlush(flushAllSync);
+  currentTargetEntry = activeEntry.value;
+  isDirtyTitle = false;
+  isDirtyContent = false;
   nextTick(() => {
     syncActiveEntryToDom();
   });
@@ -225,6 +255,7 @@ function insertSymbol(symbol: string) {
     textarea.selectionStart = textarea.selectionEnd = nextPos;
   }
 
+  isDirtyContent = true;
   flushContentSync();
   updateStats(textarea.value);
   textarea.focus();
@@ -449,6 +480,10 @@ function replaceCurrent() {
 
   const newText = fullText.slice(0, start) + replaceQuery.value + fullText.slice(start + qLen);
   activeEntry.value.content = newText;
+  if (currentTargetEntry) {
+    currentTargetEntry.content = newText;
+  }
+  isDirtyContent = false;
   if (contentTextarea.value) {
     contentTextarea.value.value = newText;
   }
@@ -469,6 +504,10 @@ function replaceAll() {
   }
   const newText = fullText.replace(regex, replaceQuery.value);
   activeEntry.value.content = newText;
+  if (currentTargetEntry) {
+    currentTargetEntry.content = newText;
+  }
+  isDirtyContent = false;
   if (contentTextarea.value) {
     contentTextarea.value.value = newText;
   }
@@ -598,6 +637,7 @@ function onTextareaBlur() {
 
 onUnmounted(() => {
   flushAllSync();
+  unregisterEditorFlush();
   if (lorebookState.isDirty && !lorebookState.isSaving) {
     void saveImmediately();
   }

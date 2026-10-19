@@ -418,8 +418,10 @@ function applyWorldBookData(data: WorldInfoData, name: string, keepActiveUid: bo
   const uids = Object.keys(data.entries).map(Number);
   if (keepActiveUid && prevActiveUid !== null && uids.includes(prevActiveUid)) {
     lorebookState.activeUid = prevActiveUid;
-  } else if (uids.length > 0) {
+  } else if (lorebookState.viewMode === 'editor' && uids.length > 0) {
     lorebookState.activeUid = uids[0];
+  } else {
+    lorebookState.activeUid = null;
   }
 }
 
@@ -709,6 +711,16 @@ export function handleBlurSave(): void {
   }
 }
 
+let editorFlushCallback: (() => void) | null = null;
+
+export function registerEditorFlush(fn: () => void): void {
+  editorFlushCallback = fn;
+}
+
+export function unregisterEditorFlush(): void {
+  editorFlushCallback = null;
+}
+
 /**
  * 立即保存世界书
  */
@@ -716,6 +728,15 @@ export async function saveImmediately(): Promise<boolean> {
   if (saveTimer) {
     clearTimeout(saveTimer);
     saveTimer = null;
+  }
+
+  // 若编辑器中有尚未同步进响应式对象的脏输入，立即将其刷入正文再落盘
+  if (editorFlushCallback) {
+    try {
+      editorFlushCallback();
+    } catch (err) {
+      console.warn('[Lorebook] editorFlushCallback error:', err);
+    }
   }
 
   if (!lorebookState.currentBook || !lorebookState.bookData) {

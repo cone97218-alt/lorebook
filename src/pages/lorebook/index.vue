@@ -17,8 +17,8 @@ onMounted(() => {
   <div class="lorebook-page">
     <KeepAlive>
       <EntryList v-if="lorebookState.viewMode === 'list'" />
-      <EntryEditor v-else />
     </KeepAlive>
+    <EntryEditor v-if="lorebookState.viewMode === 'editor'" />
   </div>
 </template>
 
