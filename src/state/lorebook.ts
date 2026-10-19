@@ -775,7 +775,7 @@ export async function createBook(name: string): Promise<boolean> {
   if (ok) {
     toast(`已成功创建世界书《${name}》`, 'success');
     await loadWorldBooks();
-    await selectWorldBook(name);
+    await selectWorldBook(name, false, true);
   } else {
     toast('创建世界书失败，可能名称重名或非法', 'warning');
   }
