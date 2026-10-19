@@ -511,8 +511,9 @@ export async function selectWorldBook(name: string, keepActiveUid = false, force
     return;
   }
 
-  if (lorebookState.isDirty && lorebookState.currentBook) {
-    await saveImmediately();
+  // 2. 如果切换到了另一本书，且当前书有未保存脏数据，必须先静默安全存盘！
+  if (lorebookState.isDirty && lorebookState.currentBook && lorebookState.currentBook !== name) {
+    await saveImmediately(false);
   }
 
   const prevActiveUid = lorebookState.activeUid;
@@ -526,14 +527,6 @@ export async function selectWorldBook(name: string, keepActiveUid = false, force
   lorebookState.selectedUids = [];
   refreshSnapshots();
   refreshBoundBooks();
-
-  // 2. 检查内存缓存是否有现成数据，有则零延迟立即呈现
-  const cached = getCachedWorldBookData(name);
-  if (cached && !forceReload) {
-    applyWorldBookData(cached, name, keepActiveUid, prevActiveUid);
-    lorebookState.isLoadingData = false;
-    return;
-  }
 
   // 3. 仅在首次无任何数据时才展示全局加载态，避免已有列表被反复清空造成视觉跳动
   if (!lorebookState.bookData) {

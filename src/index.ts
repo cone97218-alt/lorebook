@@ -93,6 +93,30 @@ function mount(): void {
   $(window).on('pagehide', () => app.unmount());
 }
 
+let hostSyncTimer: ReturnType<typeof setTimeout> | null = null;
+
+function syncFromHost(bookName?: string): void {
+  if (hostSyncTimer) clearTimeout(hostSyncTimer);
+  hostSyncTimer = setTimeout(() => {
+    // 1. 若面板未打开，不进行任何重载处理，省电且不占用网络
+    if (!ui.open) return;
+    // 2. 若正在保存、有未落盘修改、或用户正处于条目编辑详情页中：绝不重新拉取，确保用户输入绝对安全
+    if (lorebookState.isSaving || lorebookState.isDirty || lorebookState.viewMode === 'editor') {
+      return;
+    }
+    // 3. 若为自身刚刚发起的保存操作，忽略事件回声
+    if (Date.now() - lastInternalSaveTime < 2500) {
+      return;
+    }
+    // 4. 刷新绑定世界书列表
+    refreshBoundBooks();
+    // 5. 仅当外部确实修改了当前正在列表页查看的书时，才静默重载当前书
+    if (bookName && bookName === lorebookState.currentBook) {
+      void selectWorldBook(bookName, true, true);
+    }
+  }, 150);
+}
+
 /**
  * 宿主事件与生命周期管理
  */
@@ -104,10 +128,12 @@ function bindLifecycleEvents(): void {
 
   es.on(et.CHAT_CHANGED, () => {
     refreshBoundBooks();
-    // 当角色卡切换时，如果处于角色卡作用域且当前角色绑定了世界书，平滑联动
-    if (lorebookState.bookScope === 'character' && lorebookState.boundBooks.character.length > 0) {
-      if (!lorebookState.boundBooks.character.includes(lorebookState.currentBook)) {
-        void selectWorldBook(lorebookState.boundBooks.character[0]);
+    // 仅在面板已打开、处于列表模式且无未保存脏数据时联动
+    if (ui.open && lorebookState.viewMode === 'list' && !lorebookState.isDirty) {
+      if (lorebookState.bookScope === 'character' && lorebookState.boundBooks.character.length > 0) {
+        if (!lorebookState.boundBooks.character.includes(lorebookState.currentBook)) {
+          void selectWorldBook(lorebookState.boundBooks.character[0]);
+        }
       }
     }
   });
@@ -121,15 +147,7 @@ function bindLifecycleEvents(): void {
   });
 
   es.on(et.WORLDINFO_UPDATED, (bookName: string) => {
-    // 若在 3 秒内刚刚由本插件自身完成保存，内存中状态完全最新，跳过重复拉取与后端竞态覆盖
-    if (Date.now() - lastInternalSaveTime < 3000) {
-      return;
-    }
-    if (bookName && lorebookState.currentBook === bookName) {
-      if (!lorebookState.isSaving && !lorebookState.isDirty) {
-        void selectWorldBook(bookName, true, true);
-      }
-    }
+    syncFromHost(bookName);
   });
 }
 

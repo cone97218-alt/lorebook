@@ -78,25 +78,46 @@ export async function getHostWorldInfo(): Promise<any> {
 }
 
 /**
- * 插件自有内存缓存，避免重复网络请求与重复 JSON 序列化解析
+ * 读取世界书缓存（对齐酒馆原生 worldInfoCache，实现 0ms 瞬间秒开）
  */
-const bookDataMemoryCache = new Map<string, WorldInfoData>();
-
-export function getCachedWorldBookData(name: string): WorldInfoData | null {
+export async function getCachedWorldBookData(name: string): Promise<WorldInfoData | null> {
   if (!name) return null;
-  return bookDataMemoryCache.get(name) || null;
+  try {
+    const hostWI = await getHostWorldInfo();
+    if (hostWI?.worldInfoCache?.has?.(name)) {
+      const cached = hostWI.worldInfoCache.get(name);
+      if (cached && typeof cached === 'object' && cached.entries && typeof cached.entries === 'object') {
+        return JSON.parse(JSON.stringify(cached));
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return null;
 }
 
 export function setCachedWorldBookData(name: string, data: WorldInfoData): void {
   if (!name || !data) return;
-  bookDataMemoryCache.set(name, data);
+  try {
+    const hostWI = (window as any).SillyTavern?.getContext?.()?.worldInfo;
+    if (hostWI?.worldInfoCache?.set) {
+      hostWI.worldInfoCache.set(name, JSON.parse(JSON.stringify(data)));
+    }
+  } catch {
+    /* ignore */
+  }
 }
 
 export function invalidateWorldBookCache(name?: string): void {
-  if (name) {
-    bookDataMemoryCache.delete(name);
-  } else {
-    bookDataMemoryCache.clear();
+  try {
+    const hostWI = (window as any).SillyTavern?.getContext?.()?.worldInfo;
+    if (name) {
+      hostWI?.worldInfoCache?.delete?.(name);
+    } else {
+      hostWI?.worldInfoCache?.clear?.();
+    }
+  } catch {
+    /* ignore */
   }
 }
 
@@ -150,28 +171,19 @@ export async function fetchWorldBookList(): Promise<string[]> {
 }
 
 /**
- * 读取单本世界书的详细数据（优先利用内存缓存与宿主缓存，无需每次打穿后端）
+ * 读取单本世界书的详细数据
+ * 优先读取宿主原生的 in-memory worldInfoCache，实现 0ms 瞬间秒开；若无则发起网络加载
  */
 export async function fetchWorldBookData(name: string, force = false): Promise<WorldInfoData | null> {
   if (!name) return null;
 
   if (!force) {
-    // 1. 优先从插件自有内存缓存返回
-    if (bookDataMemoryCache.has(name)) {
-      return bookDataMemoryCache.get(name)!;
-    }
-
-    // 2. 检查酒馆宿主原生的 in-memory worldInfoCache
     try {
       const hostWI = await getHostWorldInfo();
       if (hostWI?.worldInfoCache?.has?.(name)) {
         const cached = hostWI.worldInfoCache.get(name);
-        if (cached && typeof cached === 'object') {
-          if (!cached.entries || typeof cached.entries !== 'object') {
-            cached.entries = {};
-          }
-          bookDataMemoryCache.set(name, cached as WorldInfoData);
-          return cached as WorldInfoData;
+        if (cached && typeof cached === 'object' && cached.entries && typeof cached.entries === 'object') {
+          return JSON.parse(JSON.stringify(cached));
         }
       }
     } catch (err) {
@@ -179,13 +191,12 @@ export async function fetchWorldBookData(name: string, force = false): Promise<W
     }
   }
 
-  // 3. 网络请求加载
   try {
     const res = await fetch('/api/worldinfo/get', {
       method: 'POST',
       headers: getHeaders(),
       body: JSON.stringify({ name }),
-      cache: 'no-cache',
+      cache: 'no-store',
     });
     if (!res.ok) return null;
     const data = await res.json();
@@ -194,13 +205,11 @@ export async function fetchWorldBookData(name: string, force = false): Promise<W
       data.entries = {};
     }
     const result = data as WorldInfoData;
-    bookDataMemoryCache.set(name, result);
 
-    // 同步给宿主缓存
     try {
       const hostWI = await getHostWorldInfo();
       if (hostWI?.worldInfoCache?.set) {
-        hostWI.worldInfoCache.set(name, result);
+        hostWI.worldInfoCache.set(name, structuredClone(result));
       }
     } catch {
       /* ignore */
@@ -217,6 +226,11 @@ export let lastInternalSaveTime = 0;
 
 /**
  * 保存世界书并通知 ST 宿主刷新缓存与事件
+ * 采用稳健的独立落盘设计：
+ * 1. 直接请求酒馆后端 /api/worldinfo/edit，绝对不调用宿主原生 saveWorldInfo（避免全局 cancelDebounce 导致的多书/多处保存相互踩踏丢数据）
+ * 2. 存盘成功后，立即同步更新酒馆宿主的 in-memory worldInfoCache（确保提示词生成与上下文扫描即时命中最新数据）
+ * 3. 轻量刷新原生编辑器抽屉（若其正在打开）
+ * 4. 触发 WORLDINFO_UPDATED 事件通知酒馆外部其他组件
  */
 export async function saveWorldBookData(name: string, data: WorldInfoData): Promise<boolean> {
   if (!name || !data) return false;
@@ -226,97 +240,54 @@ export async function saveWorldBookData(name: string, data: WorldInfoData): Prom
     const hostWI = await getHostWorldInfo();
 
     // 核心关键：将 Vue 3 的 Reactive Proxy 彻底转为纯净的 Plain JS Object
-    // 否则 SillyTavern 的 StructuredCloneMap.get(key) 会触发 structuredClone(Proxy)
-    // 从而抛出 DataCloneError: #<Object> could not be cloned，导致酒馆原生编辑器与内存缓存严重崩溃失效
+    // 否则 SillyTavern 的 StructuredCloneMap.get(key) 会触发 structuredClone(Proxy) 导致 DataCloneError
     const cleanData: WorldInfoData = JSON.parse(JSON.stringify(data));
 
-    let saved = false;
-
-    // 1. 优先调用宿主原生 saveWorldInfo，确保 SillyTavern 的 in-memory worldInfoCache 立即更新
-    if (typeof hostWI?.saveWorldInfo === 'function') {
-      try {
-        await hostWI.saveWorldInfo(name, cleanData, true);
-        saved = true;
-      } catch (err) {
-        console.warn('[Lorebook] hostWI.saveWorldInfo failed, falling back', err);
-      }
-    } else if (typeof ctx?.saveWorldInfo === 'function') {
-      try {
-        await ctx.saveWorldInfo(name, cleanData, true);
-        saved = true;
-      } catch (err) {
-        console.warn('[Lorebook] ctx.saveWorldInfo call failed, falling back to fetch', err);
-      }
+    // 1. 直接向后端提交保存，带 keepalive 确保即使用户关闭窗口/切后台也能稳定完成网络传输
+    const res = await fetch('/api/worldinfo/edit', {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify({ name, data: cleanData }),
+      keepalive: true,
+      cache: 'no-store',
+    });
+    if (!res.ok) {
+      console.error(`[Lorebook] Save failed with HTTP ${res.status}`);
+      return false;
     }
 
-    if (!saved) {
-      const res = await fetch('/api/worldinfo/edit', {
-        method: 'POST',
-        headers: getHeaders(),
-        body: JSON.stringify({ name, data: cleanData }),
-        keepalive: true,
-      });
-      if (!res.ok) return false;
-    }
-
-    // 无论走哪条分支，都确保宿主 worldInfoCache 与插件自有内存缓存中存储的是纯净的 cleanData
-    setCachedWorldBookData(name, cleanData);
+    // 2. 存盘成功后，立即将纯净克隆写入宿主原生内存缓存（worldInfoCache）
     if (hostWI?.worldInfoCache?.set) {
       try {
-        hostWI.worldInfoCache.delete?.(name);
-        hostWI.worldInfoCache.set(name, cleanData);
+        hostWI.worldInfoCache.set(name, structuredClone(cleanData));
       } catch {
         /* ignore */
       }
     }
 
-    // 2. 刷新宿主原生世界书列表与编辑抽屉
-    if (typeof hostWI?.updateWorldInfoList === 'function') {
-      try {
-        await hostWI.updateWorldInfoList();
-      } catch {
-        /* ignore */
-      }
-    } else if (typeof ctx?.updateWorldInfoList === 'function') {
-      try {
-        await ctx.updateWorldInfoList();
-      } catch {
-        /* ignore */
-      }
-    }
-
-    // 3. 实时热同步酒馆原生世界书编辑器面板
-    if (typeof hostWI?.reloadEditor === 'function') {
-      try {
-        hostWI.reloadEditor(name, false);
-      } catch {
-        /* ignore */
-      }
-    } else if (typeof ctx?.reloadWorldInfoEditor === 'function') {
-      try {
-        ctx.reloadWorldInfoEditor(name, false);
-      } catch {
-        /* ignore */
-      }
-    }
-
-    // 如果酒馆原生右侧抽屉编辑器此时正好打开着这本书，强制调用原生 showWorldEditor(name) 重绘所有 entries 条目 DOM
+    // 3. 实时轻量通知酒馆原生世界书编辑器（若当前正在打开）
     try {
-      const currentNativeSelected = String($('#world_editor_select option:selected').text());
-      if (currentNativeSelected === name && typeof hostWI?.showWorldEditor === 'function') {
-        await hostWI.showWorldEditor(name);
+      if (typeof ctx?.reloadWorldInfoEditor === 'function') {
+        ctx.reloadWorldInfoEditor(name);
+      } else if (typeof hostWI?.reloadEditor === 'function') {
+        hostWI.reloadEditor(name, false);
       }
     } catch {
       /* ignore */
     }
 
-    // 4. 触发 ST 宿主事件，通知其缓存已同步
-    const eventEmitter = hostWI?.eventSource ?? ctx?.eventSource;
-    const eventTypes = hostWI?.event_types ?? ctx?.eventTypes;
-    if (eventEmitter?.emit) {
+    // 4. 触发 ST 宿主事件，通知外部环境世界书已更新
+    try {
+      const eventEmitter = hostWI?.eventSource ?? ctx?.eventSource;
+      const eventTypes = hostWI?.event_types ?? ctx?.eventTypes;
       const eventName = eventTypes?.WORLDINFO_UPDATED || 'worldinfo_updated';
-      void eventEmitter.emit(eventName, name, cleanData);
+      if (eventEmitter?.emit) {
+        await eventEmitter.emit(eventName, name, cleanData);
+      }
+    } catch (err) {
+      console.warn('[Lorebook] Non-fatal error emitting WORLDINFO_UPDATED:', err);
     }
+
     return true;
   } catch (err) {
     console.error(`[Lorebook] Failed to save worldbook: ${name}`, err);
