@@ -60,11 +60,52 @@ const existingGroups = computed(() => {
   return Array.from(set).sort();
 });
 
-// 统计信息（非阻塞异步计算）
+// 本地标题缓存（解耦输入与全局重排/重算）
+const localComment = ref('');
+let commentSyncTimer: ReturnType<typeof setTimeout> | null = null;
+
+function onCommentInput(e: Event) {
+  const target = e.target as HTMLInputElement;
+  localComment.value = target.value;
+  if (commentSyncTimer) clearTimeout(commentSyncTimer);
+  commentSyncTimer = setTimeout(() => {
+    if (activeEntry.value && activeEntry.value.comment !== localComment.value) {
+      activeEntry.value.comment = localComment.value;
+      markDirty();
+    }
+    commentSyncTimer = null;
+  }, 400);
+}
+
+function onCommentBlur() {
+  if (commentSyncTimer) {
+    clearTimeout(commentSyncTimer);
+    commentSyncTimer = null;
+  }
+  if (activeEntry.value && activeEntry.value.comment !== localComment.value) {
+    activeEntry.value.comment = localComment.value;
+    markDirty();
+  }
+  handleBlurSave();
+}
+
+// 统计信息（空闲延迟更新，严禁在击键期间频繁遍历字符串计算）
 const charCount = ref(0);
 const estTokenCount = ref(0);
 let statsTimer: ReturnType<typeof setTimeout> | null = null;
 let contentSyncTimer: ReturnType<typeof setTimeout> | null = null;
+let isComposing = false;
+
+function updateStats(text: string) {
+  charCount.value = text.length;
+  let cjk = 0;
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    if (code >= 0x4e00 && code <= 0x9fa5) cjk++;
+  }
+  const nonCjk = text.length - cjk;
+  estTokenCount.value = Math.ceil(cjk * 0.8 + nonCjk * 0.25);
+}
 
 function flushContentSync() {
   if (contentSyncTimer) {
@@ -72,49 +113,85 @@ function flushContentSync() {
     contentSyncTimer = null;
   }
   if (contentTextarea.value && activeEntry.value) {
-    if (activeEntry.value.content !== contentTextarea.value.value) {
-      activeEntry.value.content = contentTextarea.value.value;
+    const curVal = contentTextarea.value.value;
+    if (activeEntry.value.content !== curVal) {
+      activeEntry.value.content = curVal;
       markDirty();
     }
   }
 }
 
-function updateStatsAsync(text: string) {
+function flushAllSync() {
+  if (commentSyncTimer) {
+    clearTimeout(commentSyncTimer);
+    commentSyncTimer = null;
+  }
+  if (activeEntry.value && activeEntry.value.comment !== localComment.value) {
+    activeEntry.value.comment = localComment.value;
+    markDirty();
+  }
+  flushContentSync();
+}
+
+function scheduleSync() {
+  // 停笔 800ms 后才更新响应式数据，彻底消除手机打字期间 Vue 重复 Diff 和更新 VNode 的卡顿
+  if (contentSyncTimer) clearTimeout(contentSyncTimer);
+  contentSyncTimer = setTimeout(() => {
+    flushContentSync();
+  }, 800);
+
+  // 统计信息更低优先级，停笔 1000ms 后计算
   if (statsTimer) clearTimeout(statsTimer);
   statsTimer = setTimeout(() => {
-    charCount.value = text.length;
-    let cjk = 0;
-    for (let i = 0; i < text.length; i++) {
-      const code = text.charCodeAt(i);
-      if (code >= 0x4e00 && code <= 0x9fa5) cjk++;
+    if (contentTextarea.value) {
+      updateStats(contentTextarea.value.value);
     }
-    const nonCjk = text.length - cjk;
-    estTokenCount.value = Math.ceil(cjk * 0.8 + nonCjk * 0.25);
-  }, 250);
+  }, 1000);
+}
+
+function onCompositionStart() {
+  isComposing = true;
+}
+
+function onCompositionEnd() {
+  isComposing = false;
+  scheduleSync();
+}
+
+// 输入正文：原生接管，击键 0ms 纯本地响应
+function onContentInput() {
+  if (isComposing) return;
+  scheduleSync();
+}
+
+function syncActiveEntryToDom() {
+  if (activeEntry.value) {
+    localComment.value = activeEntry.value.comment || '';
+    if (contentTextarea.value) {
+      if (contentTextarea.value.value !== (activeEntry.value.content || '')) {
+        contentTextarea.value.value = activeEntry.value.content || '';
+      }
+    }
+    updateStats(activeEntry.value.content || '');
+  }
 }
 
 watch(
-  () => activeEntry.value?.content,
-  newVal => updateStatsAsync(newVal || ''),
+  () => activeEntry.value?.uid,
+  () => {
+    flushAllSync();
+    nextTick(() => {
+      syncActiveEntryToDom();
+    });
+  },
   { immediate: true },
 );
 
-// 输入正文：停笔 250ms 后同步进响应式状态，避免高频击键触发全局计算属性重算
-function onContentInput(e: Event) {
-  const target = e.target as HTMLTextAreaElement;
-  if (!activeEntry.value) return;
-
-  if (contentSyncTimer) clearTimeout(contentSyncTimer);
-  contentSyncTimer = setTimeout(() => {
-    if (activeEntry.value) {
-      activeEntry.value.content = target.value;
-      markDirty();
-    }
-    contentSyncTimer = null;
-  }, 250);
-
-  updateStatsAsync(target.value);
-}
+onMounted(() => {
+  nextTick(() => {
+    syncActiveEntryToDom();
+  });
+});
 
 function isBracketPair(s: string): boolean {
   const pairs = ['{}', '「」', '“”', '【】', '<>', '()', '[]', '""', "''", '《》', '『』', '（）', '〔〕', '〖〗', '｛｝'];
@@ -168,14 +245,14 @@ function insertSymbol(symbol: string) {
     textarea.selectionStart = textarea.selectionEnd = nextPos;
   }
 
-  activeEntry.value.content = textarea.value;
-  markDirty();
-  updateStatsAsync(textarea.value);
+  flushContentSync();
+  updateStats(textarea.value);
   textarea.focus();
 }
 
 // 快捷键处理 (Tab 缩进与回车保持)
 function handleTextareaKeydown(e: KeyboardEvent) {
+  if (isComposing || e.isComposing || (e as any).keyCode === 229) return;
   const textarea = contentTextarea.value;
   if (!textarea) return;
 
@@ -197,12 +274,12 @@ function handleTextareaKeydown(e: KeyboardEvent) {
         textarea.value = value.substring(0, lineStart) + value.substring(lineStart + 2);
         textarea.selectionStart = Math.max(lineStart, start - 2);
         textarea.selectionEnd = Math.max(lineStart, end - 2);
-        onContentInput(e);
+        scheduleSync();
       }
     } else {
       textarea.value = value.substring(0, start) + '  ' + value.substring(end);
       textarea.selectionStart = textarea.selectionEnd = start + 2;
-      onContentInput(e);
+      scheduleSync();
     }
     return;
   }
@@ -219,12 +296,13 @@ function handleTextareaKeydown(e: KeyboardEvent) {
       const insert = '\n' + matchIndent[1];
       textarea.value = value.substring(0, start) + insert + value.substring(start);
       textarea.selectionStart = textarea.selectionEnd = start + insert.length;
-      onContentInput(e);
+      scheduleSync();
     }
   }
 }
 
 async function handleSaveNow() {
+  flushAllSync();
   const ok = await saveImmediately();
   if (ok) {
     toast('Saved', 'success');
@@ -328,7 +406,7 @@ function toggleSearch() {
 }
 
 function performSearch() {
-  const text = activeEntry.value?.content || '';
+  const text = (contentTextarea.value ? contentTextarea.value.value : activeEntry.value?.content) || '';
   const q = searchQuery.value;
   if (!q) {
     searchMatches.value = [];
@@ -387,16 +465,21 @@ function replaceCurrent() {
   if (currentMatchIndex.value < 0 || currentMatchIndex.value >= searchMatches.value.length || !activeEntry.value) return;
   const start = searchMatches.value[currentMatchIndex.value];
   const qLen = searchQuery.value.length;
-  const fullText = activeEntry.value.content || '';
+  const fullText = (contentTextarea.value ? contentTextarea.value.value : activeEntry.value.content) || '';
 
-  activeEntry.value.content = fullText.slice(0, start) + replaceQuery.value + fullText.slice(start + qLen);
+  const newText = fullText.slice(0, start) + replaceQuery.value + fullText.slice(start + qLen);
+  activeEntry.value.content = newText;
+  if (contentTextarea.value) {
+    contentTextarea.value.value = newText;
+  }
   markDirty();
+  updateStats(newText);
   performSearch();
 }
 
 function replaceAll() {
   if (!activeEntry.value || !searchQuery.value) return;
-  const fullText = activeEntry.value.content || '';
+  const fullText = (contentTextarea.value ? contentTextarea.value.value : activeEntry.value.content) || '';
   const q = searchQuery.value;
   const regex = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
   const count = (fullText.match(regex) || []).length;
@@ -404,8 +487,13 @@ function replaceAll() {
     toast('未找到可替换内容', 'info');
     return;
   }
-  activeEntry.value.content = fullText.replace(regex, replaceQuery.value);
+  const newText = fullText.replace(regex, replaceQuery.value);
+  activeEntry.value.content = newText;
+  if (contentTextarea.value) {
+    contentTextarea.value.value = newText;
+  }
   markDirty();
+  updateStats(newText);
   toast(`已替换 ${count} 处内容`, 'success');
   performSearch();
 }
@@ -421,7 +509,7 @@ function escapeHtml(str: string): string {
 
 const highlightedHtml = computed(() => {
   if (!showSearch.value) return '';
-  const text = activeEntry.value?.content || '';
+  const text = (contentTextarea.value ? contentTextarea.value.value : activeEntry.value?.content) || '';
   const q = searchQuery.value;
   if (!q || searchMatches.value.length === 0) {
     return escapeHtml(text) + '\n';
@@ -508,28 +596,36 @@ function handleTouchEnd(e: TouchEvent) {
     // 右滑退出返回列表 (滑动距离 > 60px 且主要为水平手势)
     if (deltaX > 60 && Math.abs(deltaX) > Math.abs(deltaY) * 1.5) {
       const target = e.target as HTMLElement | null;
-      if (target?.tagName === 'INPUT' && (target as HTMLInputElement).type === 'range') return;
+      if (target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA') return;
       if (target?.closest('.symbol-bar, .symbols-scroll-area, .keyword-chips-row, .accessories-wrapper')) return;
-      closeEditor();
+      handleBackClick();
     }
   }
 }
 
+function handleBackClick() {
+  flushAllSync();
+  closeEditor();
+}
+
 function onTextareaBlur() {
   flushContentSync();
+  if (contentTextarea.value) {
+    updateStats(contentTextarea.value.value);
+  }
   handleBlurSave();
 }
 
 onUnmounted(() => {
   if (statsTimer) clearTimeout(statsTimer);
-  flushContentSync();
+  flushAllSync();
   if (lorebookState.isDirty && !lorebookState.isSaving) {
     void saveImmediately();
   }
 });
 
 onDeactivated(() => {
-  flushContentSync();
+  flushAllSync();
   if (lorebookState.isDirty && !lorebookState.isSaving) {
     void saveImmediately();
   }
@@ -540,7 +636,7 @@ onDeactivated(() => {
   <div class="editor-pane" @touchstart="handleTouchStart" @touchend="handleTouchEnd">
     <div v-if="!activeEntry" class="empty-view">
       <i class="fa-solid fa-pen-ruler empty-icon"></i>
-      <button class="icon-btn" @click="closeEditor">
+      <button class="icon-btn" @click="handleBackClick">
         <i class="fa-solid fa-chevron-left"></i>
       </button>
     </div>
@@ -548,17 +644,20 @@ onDeactivated(() => {
     <div v-else class="editor-layout">
       <!-- 顶栏：返回与核心操作 (纯 FontAwesome 图标) -->
       <header class="editor-header">
-        <button class="icon-btn" @click="closeEditor" title="Back">
+        <button class="icon-btn" @click="handleBackClick" title="Back">
           <i class="fa-solid fa-chevron-left"></i>
         </button>
 
         <input
-          v-model="activeEntry.comment"
-          @input="markDirty"
-          @blur="handleBlurSave"
+          :value="localComment"
+          @input="onCommentInput"
+          @blur="onCommentBlur"
           type="text"
           placeholder="..."
           class="title-input"
+          spellcheck="false"
+          autocorrect="off"
+          autocomplete="off"
         />
 
         <div class="header-actions">
@@ -775,8 +874,9 @@ onDeactivated(() => {
         ></div>
         <textarea
           ref="contentTextarea"
-          :value="activeEntry.content"
           @input="onContentInput"
+          @compositionstart="onCompositionStart"
+          @compositionend="onCompositionEnd"
           @scroll="syncScroll"
           @blur="onTextareaBlur"
           @keydown="handleTextareaKeydown"
@@ -1283,7 +1383,6 @@ onDeactivated(() => {
   resize: none;
   z-index: 2;
   -webkit-overflow-scrolling: touch;
-  transform: translateZ(0);
 }
 
 /* 高亮标注样式 (柔和莫兰迪黄底色与当前选中的柔绿高亮) */
