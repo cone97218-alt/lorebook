@@ -60,41 +60,41 @@ const existingGroups = computed(() => {
   return Array.from(set).sort();
 });
 
-// 本地标题缓存（解耦输入与全局重排/重算）
-const localComment = ref('');
-let commentSyncTimer: ReturnType<typeof setTimeout> | null = null;
+// 本地输入解耦：击键期间 100% 原生接管，牺牲即时性以保证击键绝对无卡顿
+const titleInputRef = ref<HTMLInputElement | null>(null);
+let titleIdleTimer: ReturnType<typeof setTimeout> | null = null;
+let contentIdleTimer: ReturnType<typeof setTimeout> | null = null;
+let isComposing = false;
 
-function onCommentInput(e: Event) {
-  const target = e.target as HTMLInputElement;
-  localComment.value = target.value;
-  if (commentSyncTimer) clearTimeout(commentSyncTimer);
-  commentSyncTimer = setTimeout(() => {
-    if (activeEntry.value && activeEntry.value.comment !== localComment.value) {
-      activeEntry.value.comment = localComment.value;
-      markDirty();
-    }
-    commentSyncTimer = null;
-  }, 400);
+function onCommentInput() {
+  if (titleIdleTimer) clearTimeout(titleIdleTimer);
+  titleIdleTimer = setTimeout(() => {
+    flushTitleSync();
+  }, 3000);
 }
 
 function onCommentBlur() {
-  if (commentSyncTimer) {
-    clearTimeout(commentSyncTimer);
-    commentSyncTimer = null;
-  }
-  if (activeEntry.value && activeEntry.value.comment !== localComment.value) {
-    activeEntry.value.comment = localComment.value;
-    markDirty();
-  }
+  flushTitleSync();
   handleBlurSave();
 }
 
-// 统计信息（空闲延迟更新，严禁在击键期间频繁遍历字符串计算）
+function flushTitleSync() {
+  if (titleIdleTimer) {
+    clearTimeout(titleIdleTimer);
+    titleIdleTimer = null;
+  }
+  if (titleInputRef.value && activeEntry.value) {
+    const val = titleInputRef.value.value;
+    if (activeEntry.value.comment !== val) {
+      activeEntry.value.comment = val;
+      markDirty();
+    }
+  }
+}
+
+// 统计信息（仅在打开词条或失焦时计算，打字期间绝不耗费任何 CPU）
 const charCount = ref(0);
 const estTokenCount = ref(0);
-let statsTimer: ReturnType<typeof setTimeout> | null = null;
-let contentSyncTimer: ReturnType<typeof setTimeout> | null = null;
-let isComposing = false;
 
 function updateStats(text: string) {
   charCount.value = text.length;
@@ -108,9 +108,9 @@ function updateStats(text: string) {
 }
 
 function flushContentSync() {
-  if (contentSyncTimer) {
-    clearTimeout(contentSyncTimer);
-    contentSyncTimer = null;
+  if (contentIdleTimer) {
+    clearTimeout(contentIdleTimer);
+    contentIdleTimer = null;
   }
   if (contentTextarea.value && activeEntry.value) {
     const curVal = contentTextarea.value.value;
@@ -122,31 +122,8 @@ function flushContentSync() {
 }
 
 function flushAllSync() {
-  if (commentSyncTimer) {
-    clearTimeout(commentSyncTimer);
-    commentSyncTimer = null;
-  }
-  if (activeEntry.value && activeEntry.value.comment !== localComment.value) {
-    activeEntry.value.comment = localComment.value;
-    markDirty();
-  }
+  flushTitleSync();
   flushContentSync();
-}
-
-function scheduleSync() {
-  // 停笔 800ms 后才更新响应式数据，彻底消除手机打字期间 Vue 重复 Diff 和更新 VNode 的卡顿
-  if (contentSyncTimer) clearTimeout(contentSyncTimer);
-  contentSyncTimer = setTimeout(() => {
-    flushContentSync();
-  }, 800);
-
-  // 统计信息更低优先级，停笔 1000ms 后计算
-  if (statsTimer) clearTimeout(statsTimer);
-  statsTimer = setTimeout(() => {
-    if (contentTextarea.value) {
-      updateStats(contentTextarea.value.value);
-    }
-  }, 1000);
 }
 
 function onCompositionStart() {
@@ -155,22 +132,25 @@ function onCompositionStart() {
 
 function onCompositionEnd() {
   isComposing = false;
-  scheduleSync();
 }
 
-// 输入正文：原生接管，击键 0ms 纯本地响应
+// 输入正文：纯原生 DOM 接管，打字期间零 JS 干扰
 function onContentInput() {
   if (isComposing) return;
-  scheduleSync();
+  // 宽松的 3 秒空闲同步（用户停笔 3 秒后才在后台同步进状态）
+  if (contentIdleTimer) clearTimeout(contentIdleTimer);
+  contentIdleTimer = setTimeout(() => {
+    flushContentSync();
+  }, 3000);
 }
 
 function syncActiveEntryToDom() {
   if (activeEntry.value) {
-    localComment.value = activeEntry.value.comment || '';
-    if (contentTextarea.value) {
-      if (contentTextarea.value.value !== (activeEntry.value.content || '')) {
-        contentTextarea.value.value = activeEntry.value.content || '';
-      }
+    if (titleInputRef.value && titleInputRef.value.value !== (activeEntry.value.comment || '')) {
+      titleInputRef.value.value = activeEntry.value.comment || '';
+    }
+    if (contentTextarea.value && contentTextarea.value.value !== (activeEntry.value.content || '')) {
+      contentTextarea.value.value = activeEntry.value.content || '';
     }
     updateStats(activeEntry.value.content || '');
   }
@@ -274,12 +254,12 @@ function handleTextareaKeydown(e: KeyboardEvent) {
         textarea.value = value.substring(0, lineStart) + value.substring(lineStart + 2);
         textarea.selectionStart = Math.max(lineStart, start - 2);
         textarea.selectionEnd = Math.max(lineStart, end - 2);
-        scheduleSync();
+        onContentInput();
       }
     } else {
       textarea.value = value.substring(0, start) + '  ' + value.substring(end);
       textarea.selectionStart = textarea.selectionEnd = start + 2;
-      scheduleSync();
+      onContentInput();
     }
     return;
   }
@@ -296,7 +276,7 @@ function handleTextareaKeydown(e: KeyboardEvent) {
       const insert = '\n' + matchIndent[1];
       textarea.value = value.substring(0, start) + insert + value.substring(start);
       textarea.selectionStart = textarea.selectionEnd = start + insert.length;
-      scheduleSync();
+      onContentInput();
     }
   }
 }
@@ -617,7 +597,6 @@ function onTextareaBlur() {
 }
 
 onUnmounted(() => {
-  if (statsTimer) clearTimeout(statsTimer);
   flushAllSync();
   if (lorebookState.isDirty && !lorebookState.isSaving) {
     void saveImmediately();
@@ -649,7 +628,7 @@ onDeactivated(() => {
         </button>
 
         <input
-          :value="localComment"
+          ref="titleInputRef"
           @input="onCommentInput"
           @blur="onCommentBlur"
           type="text"
@@ -864,7 +843,10 @@ onDeactivated(() => {
       </Transition>
 
       <!-- 核心正文编辑区（带同步背景高亮层） -->
-      <main class="editor-main" :class="[`font-size-${ui.fontSize}`, `font-family-${ui.fontFamily}`]">
+      <main
+        class="editor-main"
+        :class="[`font-size-${ui.fontSize}`, `font-family-${ui.fontFamily}`, { 'search-active': showSearch }]"
+      >
         <div
           v-if="showSearch"
           ref="backdropRef"
@@ -1345,6 +1327,7 @@ onDeactivated(() => {
   position: relative;
   background: var(--myext-bg);
   overflow: hidden;
+  contain: strict;
 }
 
 .content-backdrop,
@@ -1378,11 +1361,16 @@ onDeactivated(() => {
 }
 
 .content-textarea {
-  background: transparent;
+  background: var(--myext-bg);
   color: var(--myext-ink);
   resize: none;
   z-index: 2;
   -webkit-overflow-scrolling: touch;
+}
+
+/* 仅在搜索高亮激活时透明，以便露出 backdrop 高亮层 */
+.search-active .content-textarea {
+  background: transparent;
 }
 
 /* 高亮标注样式 (柔和莫兰迪黄底色与当前选中的柔绿高亮) */
@@ -1799,6 +1787,13 @@ onDeactivated(() => {
     width: 64px;
     min-width: 64px;
     font-size: 12px;
+  }
+}
+
+@media (max-width: 640px) {
+  .title-input,
+  .content-textarea {
+    font-size: 16px !important;
   }
 }
 </style>

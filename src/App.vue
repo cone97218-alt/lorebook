@@ -90,6 +90,7 @@ const windowStyle = computed(() => {
   return {
     transform: `translateY(${dragY.value}px)`,
     transition: dragging.value ? 'none' : undefined,
+    willChange: 'transform',
   };
 });
 </script>
