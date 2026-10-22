@@ -11,6 +11,12 @@ export type ThemeName =
   | 'matcha_sand'
   | 'sunset_blush'
   | 'pale_marine'
+  | 'day'
+  | 'night'
+  | 'pastel'
+  | 'lake_green'
+  | 'cyber_neon'
+  | 'crimson_night'
   | 'st';
 export type PanelPosition = 'center' | 'bottom' | 'top' | 'fullscreen';
 export type PanelHeight = 'compact' | 'medium' | 'large' | 'full';
@@ -118,6 +124,12 @@ function normalize(raw: unknown): ExtensionSettings {
     'matcha_sand',
     'sunset_blush',
     'pale_marine',
+    'day',
+    'night',
+    'pastel',
+    'lake_green',
+    'cyber_neon',
+    'crimson_night',
     'st',
   ];
   const validPositions: PanelPosition[] = ['center', 'bottom', 'top', 'fullscreen'];

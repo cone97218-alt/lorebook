@@ -123,15 +123,25 @@ export function invalidateWorldBookCache(name?: string): void {
 
 /**
  * 获取所有世界书名称列表（优先读取酒馆内存中的已就绪列表，实现 0ms 秒开）
+ * 当 force 为 true 时强制刷新后端与原生列表
  */
-export async function fetchWorldBookList(): Promise<string[]> {
-  try {
-    const hostWI = await getHostWorldInfo();
-    if (Array.isArray(hostWI?.world_names) && hostWI.world_names.length > 0) {
-      return [...hostWI.world_names];
+export async function fetchWorldBookList(force = false): Promise<string[]> {
+  const hostWI = await getHostWorldInfo();
+
+  if (!force && Array.isArray(hostWI?.world_names) && hostWI.world_names.length > 0) {
+    return [...hostWI.world_names];
+  }
+
+  // 若要求强刷，先促使原生更新其内部列表
+  if (force && typeof hostWI?.updateWorldInfoList === 'function') {
+    try {
+      await hostWI.updateWorldInfoList();
+      if (Array.isArray(hostWI.world_names) && hostWI.world_names.length > 0) {
+        return [...hostWI.world_names];
+      }
+    } catch {
+      /* fallback to api */
     }
-  } catch {
-    /* fallback to api */
   }
 
   try {
@@ -143,7 +153,13 @@ export async function fetchWorldBookList(): Promise<string[]> {
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data)) {
-        return data.map((item: any) => (typeof item === 'string' ? item : item.name || item.file_id)).filter(Boolean);
+        const list = data.map((item: any) => (typeof item === 'string' ? item : item.file_id || item.name)).filter(Boolean);
+        // 同步更新 hostWI.world_names 保持原生与插件一致
+        if (hostWI && Array.isArray(hostWI.world_names)) {
+          hostWI.world_names.length = 0;
+          hostWI.world_names.push(...list);
+        }
+        return list;
       }
     }
   } catch (err) {
@@ -160,11 +176,19 @@ export async function fetchWorldBookList(): Promise<string[]> {
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data.world_names)) {
+        if (hostWI && Array.isArray(hostWI.world_names)) {
+          hostWI.world_names.length = 0;
+          hostWI.world_names.push(...data.world_names);
+        }
         return data.world_names;
       }
     }
   } catch (err) {
     console.error('[Lorebook] Failed to fetch world book list:', err);
+  }
+
+  if (Array.isArray(hostWI?.world_names)) {
+    return [...hostWI.world_names];
   }
 
   return [];
@@ -308,9 +332,40 @@ export async function createNewWorldBook(name: string): Promise<boolean> {
 }
 
 /**
+ * 强制同步宿主世界书列表，确保宿主内存、DOM 及事件与磁盘完全对齐
+ */
+export async function syncHostWorldInfoList(): Promise<string[]> {
+  const hostWI = await getHostWorldInfo();
+  if (typeof hostWI?.updateWorldInfoList === 'function') {
+    try {
+      await hostWI.updateWorldInfoList();
+    } catch (err) {
+      console.warn('[Lorebook] hostWI.updateWorldInfoList failed:', err);
+    }
+  }
+
+  const list = await fetchWorldBookList(true);
+
+  // 触发宿主世界书设置更新通知
+  try {
+    const ctx = getContext();
+    const eventEmitter = hostWI?.eventSource ?? ctx?.eventSource;
+    const eventTypes = hostWI?.event_types ?? ctx?.eventTypes;
+    if (eventEmitter?.emit) {
+      const eventName = eventTypes?.WORLDINFO_SETTINGS_UPDATED || 'worldinfo_settings_updated';
+      void eventEmitter.emit(eventName);
+    }
+  } catch {
+    /* ignore */
+  }
+
+  return list;
+}
+
+/**
  * 删除世界书并热更新 SillyTavern 原生界面与缓存
  */
-export async function deleteWorldBook(name: string): Promise<boolean> {
+export async function deleteWorldBook(name: string, syncHost = true): Promise<boolean> {
   if (!name) return false;
   try {
     const ctx = getContext();
@@ -364,46 +419,48 @@ export async function deleteWorldBook(name: string): Promise<boolean> {
       }
     }
 
-    // 4. 同步更新宿主原生世界书列表与选单
-    if (typeof hostWI?.updateWorldInfoList === 'function') {
+    // 4. 同步更新宿主原生世界书列表与选单（批量模式时可跳过单次更新，待整体完成后统一同步）
+    if (syncHost) {
+      if (typeof hostWI?.updateWorldInfoList === 'function') {
+        try {
+          await hostWI.updateWorldInfoList();
+        } catch {
+          /* ignore */
+        }
+      } else if (typeof ctx?.updateWorldInfoList === 'function') {
+        try {
+          await ctx.updateWorldInfoList();
+        } catch {
+          /* ignore */
+        }
+      }
+
+      // 5. 原生 DOM 彻底清理与选中状态重置
       try {
-        await hostWI.updateWorldInfoList();
+        document.querySelectorAll<HTMLOptionElement>('#world_info option, #world_editor_select option, #character_world option')
+          .forEach((el) => {
+            if (el.textContent === name || el.value === name) {
+              el.remove();
+            }
+          });
+
+        // 如果原生编辑器刚才正在看这本被删除的书，重置原生编辑器为未选中并隐藏
+        const editorSelect = $('#world_editor_select');
+        const currentNativeSelected = String(editorSelect.find('option:selected').text());
+        if (currentNativeSelected === name || !currentNativeSelected) {
+          editorSelect.val('').trigger('change');
+        }
       } catch {
         /* ignore */
       }
-    } else if (typeof ctx?.updateWorldInfoList === 'function') {
-      try {
-        await ctx.updateWorldInfoList();
-      } catch {
-        /* ignore */
+
+      // 6. 触发原生设置更新事件
+      const eventEmitter = hostWI?.eventSource ?? ctx?.eventSource;
+      const eventTypes = hostWI?.event_types ?? ctx?.eventTypes;
+      if (eventEmitter?.emit) {
+        const eventName = eventTypes?.WORLDINFO_SETTINGS_UPDATED || 'worldinfo_settings_updated';
+        void eventEmitter.emit(eventName);
       }
-    }
-
-    // 5. 原生 DOM 彻底清理与选中状态重置
-    try {
-      document.querySelectorAll<HTMLOptionElement>('#world_info option, #world_editor_select option, #character_world option')
-        .forEach((el) => {
-          if (el.textContent === name || el.value === name) {
-            el.remove();
-          }
-        });
-
-      // 如果原生编辑器刚才正在看这本被删除的书，重置原生编辑器为未选中并隐藏
-      const editorSelect = $('#world_editor_select');
-      const currentNativeSelected = String(editorSelect.find('option:selected').text());
-      if (currentNativeSelected === name || !currentNativeSelected) {
-        editorSelect.val('').trigger('change');
-      }
-    } catch {
-      /* ignore */
-    }
-
-    // 6. 触发原生设置更新事件
-    const eventEmitter = hostWI?.eventSource ?? ctx?.eventSource;
-    const eventTypes = hostWI?.event_types ?? ctx?.eventTypes;
-    if (eventEmitter?.emit) {
-      const eventName = eventTypes?.WORLDINFO_SETTINGS_UPDATED || 'worldinfo_settings_updated';
-      void eventEmitter.emit(eventName);
     }
 
     return true;
@@ -420,11 +477,148 @@ export async function batchDeleteWorldBooks(names: string[]): Promise<{ success:
   let success = 0;
   let failed = 0;
   for (const name of names) {
-    const ok = await deleteWorldBook(name);
+    const ok = await deleteWorldBook(name, false);
     if (ok) success++;
     else failed++;
   }
+  if (success > 0) {
+    await syncHostWorldInfoList();
+  }
   return { success, failed };
+}
+
+/**
+ * 规范化导入的世界书原始数据，全面兼容各类标准格式：
+ * 1. 标准 SillyTavern 字典格式（{ entries: { "0": {...} } }）
+ * 2. Character Book (V2 规范，entries 为数组，包含 keys, id, comment 等)
+ * 3. 角色卡嵌入式世界书（character_book 或 data.character_book）
+ * 4. NovelAI / Agnai / Risu 格式
+ * 5. 纯条目数组（[ {...}, {...} ]）
+ */
+export function normalizeWorldBookData(raw: any, hostWI?: any): WorldInfoData | null {
+  if (!raw || typeof raw !== 'object') return null;
+
+  let parsed = raw;
+
+  // 1. 如果包含角色卡嵌入式世界书 (character_book / data.character_book)
+  if (parsed.character_book && typeof parsed.character_book === 'object') {
+    parsed = parsed.character_book;
+  } else if (parsed.data?.character_book && typeof parsed.data.character_book === 'object') {
+    parsed = parsed.data.character_book;
+  }
+
+  // 2. 尝试调用酒馆原生转换函数转换第三方世界书格式
+  if (parsed.lorebookVersion !== undefined && typeof hostWI?.convertNovelLorebook === 'function') {
+    try {
+      parsed = hostWI.convertNovelLorebook(parsed);
+    } catch (e) {
+      console.warn('[Lorebook] convertNovelLorebook failed:', e);
+    }
+  } else if (parsed.kind === 'memory' && typeof hostWI?.convertAgnaiMemoryBook === 'function') {
+    try {
+      parsed = hostWI.convertAgnaiMemoryBook(parsed);
+    } catch (e) {
+      console.warn('[Lorebook] convertAgnaiMemoryBook failed:', e);
+    }
+  } else if (parsed.type === 'risu' && typeof hostWI?.convertRisuLorebook === 'function') {
+    try {
+      parsed = hostWI.convertRisuLorebook(parsed);
+    } catch (e) {
+      console.warn('[Lorebook] convertRisuLorebook failed:', e);
+    }
+  }
+
+  // 3. 如果原生 convertCharacterBook 可用，且 entries 是数组（典型 Character Book V2 规范）
+  if (Array.isArray(parsed.entries) && typeof hostWI?.convertCharacterBook === 'function') {
+    try {
+      const converted = hostWI.convertCharacterBook(parsed);
+      if (converted && converted.entries && typeof converted.entries === 'object' && !Array.isArray(converted.entries)) {
+        return converted as WorldInfoData;
+      }
+    } catch (e) {
+      console.warn('[Lorebook] convertCharacterBook failed:', e);
+    }
+  }
+
+  // 4. 标准酒馆字典格式：{ entries: { "0": {...}, "1": {...} } }（确保 entries 不是 Array 且每个条目符合模板）
+  if (parsed.entries && typeof parsed.entries === 'object' && !Array.isArray(parsed.entries)) {
+    const finalEntries: Record<string | number, WorldInfoEntry> = {};
+    for (const [key, item] of Object.entries(parsed.entries)) {
+      if (item && typeof item === 'object') {
+        const rawUid = (item as any).uid !== undefined ? Number((item as any).uid) : Number(key);
+        const uid = isNaN(rawUid) ? 0 : rawUid;
+        finalEntries[uid] = {
+          ...createEntryTemplate(uid),
+          ...(item as any),
+          uid,
+        };
+      }
+    }
+    return {
+      ...parsed,
+      entries: finalEntries,
+    };
+  }
+
+  // 5. 数组形式的条目：无论是 parsed.entries 是数组，还是 parsed 本身就是数组
+  const rawList: any[] | null = Array.isArray(parsed.entries)
+    ? parsed.entries
+    : Array.isArray(parsed)
+      ? parsed
+      : null;
+
+  if (rawList) {
+    const finalEntries: Record<string | number, WorldInfoEntry> = {};
+    rawList.forEach((item: any, index: number) => {
+      if (!item || typeof item !== 'object') return;
+      const uid = item.uid !== undefined ? Number(item.uid) : (item.id !== undefined ? Number(item.id) : index);
+      const key = Array.isArray(item.key)
+        ? item.key
+        : Array.isArray(item.keys)
+          ? item.keys
+          : (typeof item.key === 'string' ? [item.key] : []);
+      const keysecondary = Array.isArray(item.keysecondary)
+        ? item.keysecondary
+        : Array.isArray(item.secondary_keys)
+          ? item.secondary_keys
+          : (typeof item.keysecondary === 'string' ? [item.keysecondary] : []);
+      const comment = item.comment ?? item.name ?? '新词条';
+      const content = item.content ?? item.text ?? '';
+      const order = item.order ?? item.insertion_order ?? 100;
+      const disable = item.disable !== undefined ? Boolean(item.disable) : (item.enabled !== undefined ? !item.enabled : false);
+      const constant = item.constant !== undefined ? Boolean(item.constant) : false;
+      const selective = item.selective !== undefined ? Boolean(item.selective) : true;
+
+      finalEntries[uid] = {
+        ...createEntryTemplate(uid),
+        ...item,
+        uid,
+        key,
+        keysecondary,
+        comment,
+        content,
+        order,
+        disable,
+        constant,
+        selective,
+      };
+    });
+
+    return {
+      ...parsed,
+      entries: finalEntries,
+    };
+  }
+
+  // 6. 兜底空世界书
+  if (typeof parsed === 'object') {
+    return {
+      ...parsed,
+      entries: {},
+    };
+  }
+
+  return null;
 }
 
 /**
@@ -438,32 +632,22 @@ export async function importWorldBookFromJson(name: string, content: string | ob
   if (typeof content === 'string') {
     try {
       parsed = JSON.parse(content);
-    } catch {
+    } catch (err) {
+      console.error(`[Lorebook] Failed to parse JSON for "${cleanName}":`, err);
       return false;
     }
   } else {
     parsed = content;
   }
 
-  let finalData: WorldInfoData;
-  if (parsed && typeof parsed === 'object') {
-    if (parsed.entries && typeof parsed.entries === 'object') {
-      finalData = parsed as WorldInfoData;
-    } else if (Array.isArray(parsed)) {
-      const entries: Record<string, any> = {};
-      parsed.forEach((item, index) => {
-        const uid = item.uid ?? index;
-        entries[uid] = { ...item, uid };
-      });
-      finalData = { entries };
-    } else {
-      finalData = { entries: {} };
-    }
-  } else {
+  const hostWI = await getHostWorldInfo();
+  const normalizedData = normalizeWorldBookData(parsed, hostWI);
+  if (!normalizedData) {
+    console.error(`[Lorebook] Invalid worldbook format for "${cleanName}"`);
     return false;
   }
 
-  return saveWorldBookData(cleanName, finalData);
+  return saveWorldBookData(cleanName, normalizedData);
 }
 
 /**
@@ -479,9 +663,12 @@ export async function renameWorldBook(oldName: string, newName: string, data: Wo
   if (!saveOk) return false;
 
   // 2. 删除旧名称
-  await deleteWorldBook(cleanOld);
+  await deleteWorldBook(cleanOld, false);
 
-  // 3. 触发宿主更新通知
+  // 3. 强制同步宿主世界书列表
+  await syncHostWorldInfoList();
+
+  // 4. 触发宿主更新通知
   const ctx = getContext();
   if (ctx?.eventSource?.emit) {
     const eventName = ctx.eventTypes?.WORLDINFO_UPDATED || 'worldinfo_updated';

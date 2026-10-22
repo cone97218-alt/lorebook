@@ -26,8 +26,15 @@ function toggleSection(sec: keyof typeof openSections.value) {
   openSections.value[sec] = !openSections.value[sec];
 }
 
-// 主题列表 (莫兰迪高级色系与酒馆自适应)
+// 主题列表 (莫兰迪高级色系、柏宝雅韵与酒馆自适应)
 const themes: { id: ThemeName; name: string; bg: string; accent: string }[] = [
+  // 雅韵经典系列
+  { id: 'day', name: '象牙暖金', bg: '#f6f5f2', accent: '#ac6304' },
+  { id: 'night', name: '玄青墨夜', bg: '#37353E', accent: '#76ABAE' },
+  { id: 'pastel', name: '粉彩罗兰', bg: '#fcf4fb', accent: '#d84b76' },
+  { id: 'lake_green', name: '青池烟柳', bg: '#F0F6F8', accent: '#529E93' },
+
+  // 经典莫兰迪系列
   { id: 'obsidian', name: '静谧雾灰', bg: '#15181c', accent: '#6b8ca8' },
   { id: 'midnight', name: '青苔橄榄', bg: '#141815', accent: '#6e9681' },
   { id: 'sepia', name: '烟熏陶土', bg: '#1a1715', accent: '#b88a76' },
@@ -37,7 +44,13 @@ const themes: { id: ThemeName; name: string; bg: string; accent: string }[] = [
   { id: 'matcha_sand', name: '抹茶杏仁', bg: '#f1f4f0', accent: '#4d7a5b' },
   { id: 'sunset_blush', name: '暮云暖粉', bg: '#f6f2f0', accent: '#9c6356' },
   { id: 'pale_marine', name: '海盐天青', bg: '#f0f4f5', accent: '#477782' },
-  { id: 'st', name: '酒馆自适应', bg: '#1e2028', accent: '#3b82f6' },
+
+  // 极客与夜色
+  { id: 'cyber_neon', name: '极客霓虹', bg: '#0c1017', accent: '#00f0ff' },
+  { id: 'crimson_night', name: '暗夜深绯', bg: '#161114', accent: '#e11d48' },
+
+  // 宿主自适应
+  { id: 'st', name: '跟随酒馆配色', bg: '#2b2d35', accent: '#718cc1' },
 ];
 
 // 位置列表

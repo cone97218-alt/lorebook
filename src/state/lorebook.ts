@@ -7,6 +7,7 @@ import {
   deleteWorldBook,
   batchDeleteWorldBooks,
   importWorldBookFromJson,
+  syncHostWorldInfoList,
   renameWorldBook,
   getBoundWorldBooks,
   getCachedWorldBookData,
@@ -455,7 +456,7 @@ export async function loadWorldBooks(forceReloadCurrent = false): Promise<void> 
   lorebookState.isLoadingBooks = true;
   refreshBoundBooks();
   try {
-    const list = await fetchWorldBookList();
+    const list = await fetchWorldBookList(forceReloadCurrent);
     lorebookState.books = list;
 
     // 如果还没有选择当前书，尝试读取上次浏览的或者第一本
@@ -464,6 +465,10 @@ export async function loadWorldBooks(forceReloadCurrent = false): Promise<void> 
       const target = (last && list.includes(last)) ? last : (list[0] || '');
       if (target) {
         await selectWorldBook(target);
+      } else {
+        lorebookState.currentBook = '';
+        lorebookState.bookData = null;
+        lorebookState.activeUid = null;
       }
     } else if (forceReloadCurrent && lorebookState.currentBook) {
       await selectWorldBook(lorebookState.currentBook, true, true);
@@ -898,7 +903,8 @@ export async function createBook(name: string): Promise<boolean> {
   const ok = await createNewWorldBook(name);
   if (ok) {
     toast(`已成功创建世界书《${name}》`, 'success');
-    await loadWorldBooks();
+    await syncHostWorldInfoList();
+    await loadWorldBooks(true);
     await selectWorldBook(name, false, true);
   } else {
     toast('创建世界书失败，可能名称重名或非法', 'warning');
@@ -912,13 +918,14 @@ export async function createBook(name: string): Promise<boolean> {
 export async function deleteCurrentBook(): Promise<boolean> {
   const name = lorebookState.currentBook;
   if (!name) return false;
-  const ok = await deleteWorldBook(name);
+  const ok = await deleteWorldBook(name, true);
   if (ok) {
     toast(`世界书《${name}》已删除`, 'info');
     lorebookState.currentBook = '';
     lorebookState.bookData = null;
     lorebookState.activeUid = null;
-    await loadWorldBooks();
+    await syncHostWorldInfoList();
+    await loadWorldBooks(true);
   } else {
     toast('删除失败', 'warning');
   }
@@ -937,7 +944,8 @@ export async function renameCurrentBook(newName: string): Promise<boolean> {
   const ok = await renameWorldBook(oldName, cleanNew, lorebookState.bookData);
   if (ok) {
     toast(`已成功重命名为《${cleanNew}》`, 'success');
-    await loadWorldBooks();
+    await syncHostWorldInfoList();
+    await loadWorldBooks(true);
     await selectWorldBook(cleanNew);
   } else {
     toast('重命名失败，可能名称重名或非法', 'warning');
@@ -1260,7 +1268,8 @@ export async function batchDeleteBooks(names: string[]): Promise<boolean> {
       lorebookState.currentBook = '';
       lorebookState.bookData = null;
     }
-    await loadWorldBooks();
+    await syncHostWorldInfoList();
+    await loadWorldBooks(true);
     return true;
   } else {
     toast('删除失败', 'warning');
@@ -1271,26 +1280,53 @@ export async function batchDeleteBooks(names: string[]): Promise<boolean> {
 /**
  * 批量导入多本世界书 JSON
  */
-export async function batchImportBooks(files: FileList | File[]): Promise<number> {
-  let count = 0;
+export async function batchImportBooks(files: FileList | File[]): Promise<{ success: number; failed: number; names: string[] }> {
+  let success = 0;
+  let failed = 0;
+  const importedNames: string[] = [];
+
   for (let i = 0; i < files.length; i++) {
     const file = files[i];
-    const bookName = file.name.replace(/\.json$/i, '');
+    const bookName = file.name.replace(/\.json$/i, '').trim();
+    if (!bookName) {
+      failed++;
+      continue;
+    }
+
     try {
       const text = await file.text();
       const ok = await importWorldBookFromJson(bookName, text);
-      if (ok) count++;
+      if (ok) {
+        success++;
+        importedNames.push(bookName);
+      } else {
+        failed++;
+      }
     } catch (err) {
       console.error(`[Lorebook] Failed to import ${file.name}:`, err);
+      failed++;
     }
   }
-  if (count > 0) {
-    toast(`成功导入 ${count} 本世界书`, 'success');
-    await loadWorldBooks();
+
+  if (success > 0) {
+    await syncHostWorldInfoList();
+    await loadWorldBooks(true);
+
+    // 若当前未选世界书，自动定位到首本导入的书
+    if (!lorebookState.currentBook && importedNames[0]) {
+      await selectWorldBook(importedNames[0]);
+    }
+
+    if (failed === 0) {
+      toast(`成功导入 ${success} 本世界书`, 'success');
+    } else {
+      toast(`成功导入 ${success} 本世界书，${failed} 本失败`, 'warning');
+    }
   } else {
-    toast('导入未成功，请检查文件格式', 'warning');
+    toast('导入未成功，请检查文件格式是否有效', 'warning');
   }
-  return count;
+
+  return { success, failed, names: importedNames };
 }
 
 /**

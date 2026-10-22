@@ -155,35 +155,122 @@
   --myext-shadow: 0 16px 40px -8px rgba(0, 0, 0, 0.1);
 }
 
-/* ================= 6. 酒馆自适应 (ST Adaptive - 基于原生变量深度混色) ================= */
-.myext-root[data-theme='st'] {
-  /* 背景：取酒馆原生主背景 */
-  --myext-bg: var(--SmartThemeBlurTintColor, #13151b);
-
-  /* 主表面卡片：背景与文字柔和混色生成高质感卡片底色 */
-  --myext-surface: color-mix(in srgb, var(--SmartThemeBlurTintColor, #13151b) 88%, var(--SmartThemeBodyColor, #ffffff) 12%);
-
-  /* 次级表面/输入框/按钮：稍亮的交互底色 */
-  --myext-surface-2: color-mix(in srgb, var(--SmartThemeBlurTintColor, #13151b) 78%, var(--SmartThemeBodyColor, #ffffff) 22%);
-
-  /* 主文字：严格绑定酒馆原生正文文字颜色 */
-  --myext-ink: var(--SmartThemeBodyColor, #e2e8f0);
-
-  /* 次级文字：严格绑定酒馆原生强调/斜体文字色 */
-  --myext-ink-soft: var(--SmartThemeEmColor, #94a3b8);
-
-  /* 提示弱化文字 */
-  --myext-ink-muted: color-mix(in srgb, var(--SmartThemeEmColor, #94a3b8) 65%, transparent);
-
-  /* 重点高亮强调色：取酒馆原生高亮/引用对话色 */
-  --myext-accent: var(--SmartThemeQuoteColor, var(--SmartThemeHighlightColor, #3b82f6));
+/* ================= 6. 象牙暖金 (Day Ivory - 经典黑金雅韵) ================= */
+.myext-root[data-theme='day'] {
+  --myext-bg: #f6f5f2;
+  --myext-surface: #ffffff;
+  --myext-surface-2: #eeede8;
+  --myext-ink: #14213d;
+  --myext-ink-soft: #4d586f;
+  --myext-ink-muted: #7d8699;
+  --myext-accent: #ac6304;
   --myext-accent-ink: #ffffff;
+  --myext-line: #e2e1de;
+  --myext-line-strong: #d6d4d0;
+  --myext-overlay: rgba(20, 33, 61, 0.38);
+  --myext-shadow: 0 16px 40px -8px rgba(20, 33, 61, 0.15);
+}
 
-  /* 分割线与边框：严格采用酒馆原生边框色 */
-  --myext-line: var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.12));
-  --myext-line-strong: color-mix(in srgb, var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.2)) 70%, var(--SmartThemeBodyColor, #fff) 30%);
+/* ================= 7. 玄青墨夜 (Night Navy - 海军墨蓝与冰青) ================= */
+.myext-root[data-theme='night'] {
+  --myext-bg: #37353E;
+  --myext-surface: #44444E;
+  --myext-surface-2: #4E4D58;
+  --myext-ink: #D3DAD9;
+  --myext-ink-soft: #B0B5B4;
+  --myext-ink-muted: #8E9392;
+  --myext-accent: #76ABAE;
+  --myext-accent-ink: #2C3536;
+  --myext-line: #53525D;
+  --myext-line-strong: #686774;
+  --myext-overlay: rgba(31, 30, 36, 0.68);
+  --myext-shadow: 0 18px 48px -10px rgba(0, 0, 0, 0.6);
+}
 
-  /* 阴影与遮罩 */
-  --myext-shadow: 0 20px 48px -8px var(--SmartThemeShadowColor, rgba(0, 0, 0, 0.55));
-  --myext-overlay: rgba(0, 0, 0, 0.65);
+/* ================= 8. 粉彩罗兰 (Pastel Lilac - 薰衣草粉与梅粉) ================= */
+.myext-root[data-theme='pastel'] {
+  --myext-bg: #fcf4fb;
+  --myext-surface: #ffffff;
+  --myext-surface-2: #faebf6;
+  --myext-ink: #572953;
+  --myext-ink-soft: #83587f;
+  --myext-ink-muted: #a57da1;
+  --myext-accent: #d84b76;
+  --myext-accent-ink: #ffffff;
+  --myext-line: #ebdce9;
+  --myext-line-strong: #e0c9da;
+  --myext-overlay: rgba(87, 41, 83, 0.38);
+  --myext-shadow: 0 16px 40px -8px rgba(131, 88, 127, 0.2);
+}
+
+/* ================= 9. 青池烟柳 (Misty Lake - 雾蓝碧青) ================= */
+.myext-root[data-theme='lake_green'] {
+  --myext-bg: #F0F6F8;
+  --myext-surface: #FFFFFF;
+  --myext-surface-2: #E0EFE8;
+  --myext-ink: #2C4A52;
+  --myext-ink-soft: #638289;
+  --myext-ink-muted: #95AEB4;
+  --myext-accent: #529E93;
+  --myext-accent-ink: #FFFFFF;
+  --myext-line: #BFE3DF;
+  --myext-line-strong: #8AC2BB;
+  --myext-overlay: rgba(44, 74, 82, 0.38);
+  --myext-shadow: 0 16px 40px -8px rgba(50, 100, 96, 0.18);
+}
+
+/* ================= 10. 极客·赛博霓虹 (Cyber Neon - 深邃夜幕与高亮冰青) ================= */
+.myext-root[data-theme='cyber_neon'] {
+  --myext-bg: #0c1017;
+  --myext-surface: #151b23;
+  --myext-surface-2: #212830;
+  --myext-ink: #f0f6fc;
+  --myext-ink-soft: #9198a1;
+  --myext-ink-muted: #656c76;
+  --myext-accent: #00f0ff;
+  --myext-accent-ink: #000000;
+  --myext-line: rgba(255, 255, 255, 0.12);
+  --myext-line-strong: rgba(0, 240, 255, 0.4);
+  --myext-overlay: rgba(0, 0, 0, 0.75);
+  --myext-shadow: 0 18px 48px -8px rgba(0, 0, 0, 0.7);
+}
+
+/* ================= 11. 暮色·暗夜深绯 (Crimson Night - 丝绒黑与深玫瑰红) ================= */
+.myext-root[data-theme='crimson_night'] {
+  --myext-bg: #161114;
+  --myext-surface: #20181d;
+  --myext-surface-2: #2b2027;
+  --myext-ink: #f2e9ee;
+  --myext-ink-soft: #b59da9;
+  --myext-ink-muted: #7d6874;
+  --myext-accent: #e11d48;
+  --myext-accent-ink: #ffffff;
+  --myext-line: rgba(255, 255, 255, 0.08);
+  --myext-line-strong: rgba(225, 29, 72, 0.35);
+  --myext-overlay: rgba(0, 0, 0, 0.72);
+  --myext-shadow: 0 18px 48px -8px rgba(0, 0, 0, 0.65);
+}
+
+/* ================= 12. 跟随 ST 宿主主题 (深度混色算法) =================
+   严格从 SillyTavern 宿主主题的 --SmartTheme* 变量派生：
+   1. 背景取 --SmartThemeBlurTintColor，卡片取 --SmartThemeChatTintColor；
+   2. 次级面通过 color-mix 混入文字主色，优雅拉开输入框/次级卡片层次；
+   3. 软化文字使用 body↔bg 深度色彩退让，比原生 EmColor 更清晰稳定；
+   4. 强调色优先取 --SmartThemeQuoteColor 与 --SmartThemeHighlightColor；
+   5. 边框直接承接 --SmartThemeBorderColor，遮罩采用稳定中性深色。 */
+.myext-root[data-theme='st'] {
+  --myext-bg: var(--SmartThemeBlurTintColor, #f6f5f2);
+  --myext-surface: var(--SmartThemeChatTintColor, #ffffff);
+  --myext-surface-2: color-mix(in srgb, var(--SmartThemeChatTintColor, #ffffff) 92%, var(--SmartThemeBodyColor, #000000));
+  --myext-ink: var(--SmartThemeBodyColor, #14213d);
+  --myext-ink-soft: color-mix(in srgb, var(--SmartThemeBodyColor, #14213d) 72%, var(--SmartThemeBlurTintColor, #f6f5f2));
+  --myext-ink-muted: color-mix(in srgb, var(--SmartThemeBodyColor, #14213d) 52%, var(--SmartThemeBlurTintColor, #f6f5f2));
+  --myext-accent: var(--SmartThemeQuoteColor, var(--SmartThemeHighlightColor, #718cc1));
+  --myext-accent-soft: color-mix(in srgb, var(--SmartThemeQuoteColor, #718cc1) 14%, transparent);
+  --myext-accent-ink: var(--SmartThemeBlurTintColor, #ffffff);
+  --myext-line: var(--SmartThemeBorderColor, #cfbcbc);
+  --myext-line-strong: color-mix(in srgb, var(--SmartThemeBorderColor, #cfbcbc) 70%, var(--SmartThemeBodyColor, #000000));
+  --myext-overlay: #00000073;
+  --myext-shadow: 0 18px 48px -20px var(--SmartThemeShadowColor, #00000038),
+    0 4px 12px -6px var(--SmartThemeShadowColor, #0000001a);
 }

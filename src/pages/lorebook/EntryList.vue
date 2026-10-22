@@ -189,17 +189,29 @@ function invertSelectBooks() {
   selectedBookNames.value = lorebookState.books.filter(b => !currentSet.has(b));
 }
 
+const isBatchDeleting = ref(false);
+const isBatchImporting = ref(false);
+const isDraggingDropzone = ref(false);
+
 async function handleExecuteBatchDeleteBooks() {
-  if (!selectedBookNames.value.length) return;
-  const ok = await batchDeleteBooks(selectedBookNames.value);
-  if (ok) {
-    selectedBookNames.value = [];
-    showBatchBookModal.value = false;
+  if (!selectedBookNames.value.length || isBatchDeleting.value) return;
+  isBatchDeleting.value = true;
+  try {
+    const ok = await batchDeleteBooks(selectedBookNames.value);
+    if (ok) {
+      selectedBookNames.value = [];
+      showBatchBookModal.value = false;
+    }
+  } finally {
+    isBatchDeleting.value = false;
   }
 }
 
 function triggerBatchFilePicker() {
-  batchFileInput.value?.click();
+  if (batchFileInput.value) {
+    batchFileInput.value.value = '';
+    batchFileInput.value.click();
+  }
 }
 
 function handleBatchFileSelect(e: Event) {
@@ -208,12 +220,29 @@ function handleBatchFileSelect(e: Event) {
   batchImportFilesList.value = Array.from(files);
 }
 
+function handleBatchFileDrop(e: DragEvent) {
+  isDraggingDropzone.value = false;
+  const files = e.dataTransfer?.files;
+  if (!files || !files.length) return;
+  const jsonFiles = Array.from(files).filter(f => f.name.toLowerCase().endsWith('.json'));
+  if (jsonFiles.length) {
+    batchImportFilesList.value = jsonFiles;
+  } else {
+    toast('请拖入 .json 格式的世界书文件', 'warning');
+  }
+}
+
 async function handleExecuteBatchImport() {
-  if (!batchImportFilesList.value.length) return;
-  const count = await batchImportBooks(batchImportFilesList.value);
-  if (count > 0) {
-    batchImportFilesList.value = [];
-    showBatchBookModal.value = false;
+  if (!batchImportFilesList.value.length || isBatchImporting.value) return;
+  isBatchImporting.value = true;
+  try {
+    const res = await batchImportBooks(batchImportFilesList.value);
+    if (res.success > 0) {
+      batchImportFilesList.value = [];
+      showBatchBookModal.value = false;
+    }
+  } finally {
+    isBatchImporting.value = false;
   }
 }
 
@@ -1470,9 +1499,14 @@ function handleExecuteBatchGroup() {
             </label>
           </div>
           <div class="batch-delete-confirm-box" v-if="selectedBookNames.length">
-            <button type="button" class="batch-danger-execute-btn" @click="handleExecuteBatchDeleteBooks">
-              <i class="fa-solid fa-trash-can"></i>
-              <span>确认删除选中的 {{ selectedBookNames.length }} 本世界书</span>
+            <button
+              type="button"
+              class="batch-danger-execute-btn"
+              :disabled="isBatchDeleting"
+              @click="handleExecuteBatchDeleteBooks"
+            >
+              <i class="fa-solid" :class="isBatchDeleting ? 'fa-spinner fa-spin' : 'fa-trash-can'"></i>
+              <span>{{ isBatchDeleting ? '正在删除中...' : `确认删除选中的 ${selectedBookNames.length} 本世界书` }}</span>
             </button>
           </div>
         </div>
@@ -1487,16 +1521,23 @@ function handleExecuteBatchGroup() {
             style="display: none;"
             @change="handleBatchFileSelect"
           />
-          <div class="import-dropzone" @click="triggerBatchFilePicker">
+          <div
+            class="import-dropzone"
+            :class="{ 'dropzone-active': isDraggingDropzone }"
+            @click="triggerBatchFilePicker"
+            @dragover.prevent="isDraggingDropzone = true"
+            @dragleave.prevent="isDraggingDropzone = false"
+            @drop.prevent="handleBatchFileDrop"
+          >
             <i class="fa-solid fa-cloud-arrow-up drop-icon"></i>
-            <span class="drop-text">点击选择多个世界书 JSON 文件</span>
+            <span class="drop-text">点击或拖入多个世界书 JSON 文件</span>
             <span class="drop-subtext">支持单次选择多份 .json 文件批量导入</span>
           </div>
 
           <div v-if="batchImportFilesList.length" class="batch-file-preview-list">
             <div class="preview-head">
               <span>待导入文件 ({{ batchImportFilesList.length }})：</span>
-              <button type="button" class="mini-tool-btn text-xs" @click="batchImportFilesList = []">清除</button>
+              <button type="button" class="mini-tool-btn text-xs" :disabled="isBatchImporting" @click="batchImportFilesList = []">清除</button>
             </div>
             <div class="file-names-scroll">
               <div v-for="(f, i) in batchImportFilesList" :key="i" class="file-preview-row">
@@ -1505,9 +1546,14 @@ function handleExecuteBatchGroup() {
                 <span class="preview-filesize">({{ (f.size / 1024).toFixed(1) }} KB)</span>
               </div>
             </div>
-            <button type="button" class="batch-execute-import-btn" @click="handleExecuteBatchImport">
-              <i class="fa-solid fa-file-import"></i>
-              <span>开始批量导入 ({{ batchImportFilesList.length }} 个文件)</span>
+            <button
+              type="button"
+              class="batch-execute-import-btn"
+              :disabled="isBatchImporting"
+              @click="handleExecuteBatchImport"
+            >
+              <i class="fa-solid" :class="isBatchImporting ? 'fa-spinner fa-spin' : 'fa-file-import'"></i>
+              <span>{{ isBatchImporting ? '正在批量导入中...' : `开始批量导入 (${batchImportFilesList.length} 个文件)` }}</span>
             </button>
           </div>
         </div>
@@ -3622,9 +3668,10 @@ function handleExecuteBatchGroup() {
   transition: all 0.2s;
 }
 
-.import-dropzone:hover {
+.import-dropzone:hover,
+.import-dropzone.dropzone-active {
   border-color: var(--myext-accent);
-  background: rgba(110, 150, 129, 0.05);
+  background: rgba(110, 150, 129, 0.08);
 }
 
 .drop-icon {
