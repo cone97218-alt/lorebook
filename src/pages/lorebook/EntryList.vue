@@ -39,6 +39,7 @@ import {
   batchImportJson,
   batchDeleteBooks,
   batchImportBooks,
+  switchBookScope,
   checkLastActivation,
   type WorldBookSnapshot,
   type SnapshotDiff,
@@ -247,11 +248,7 @@ async function handleExecuteBatchImport() {
 }
 
 function setBookScope(scope: BookScopeFilter) {
-  lorebookState.bookScope = scope;
-  const list = filteredBooks.value;
-  if (list.length > 0 && !list.includes(lorebookState.currentBook)) {
-    void selectWorldBook(list[0]);
-  }
+  void switchBookScope(scope);
 }
 
 async function onBookChange(e: Event) {
@@ -601,9 +598,13 @@ function handleExecuteBatchGroup() {
           </button>
         </div>
 
-        <!-- 排序下拉列表 (对齐酒馆原生功能) -->
-        <div class="sort-wrapper">
-          <select v-model="lorebookState.sortOrder" class="sort-select">
+        <!-- 排序下拉列表 (对齐酒馆原生功能，支持各世界书独立绑定记忆) -->
+        <div class="sort-wrapper" :title="lorebookState.currentBook ? `条目显示/排序方式（已绑定《${lorebookState.currentBook}》）` : '条目显示/排序方式'">
+          <select
+            v-model="lorebookState.sortOrder"
+            class="sort-select"
+            :title="lorebookState.currentBook ? `条目显示/排序方式（已绑定《${lorebookState.currentBook}》）` : '条目显示/排序方式'"
+          >
             <option value="priority">优先级</option>
             <option value="custom">自定义</option>
             <option value="title_asc">标题 A-Z</option>

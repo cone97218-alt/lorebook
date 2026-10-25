@@ -132,7 +132,19 @@ function bindLifecycleEvents(): void {
     if (ui.open && lorebookState.viewMode === 'list' && !lorebookState.isDirty) {
       if (lorebookState.bookScope === 'character' && lorebookState.boundBooks.character.length > 0) {
         if (!lorebookState.boundBooks.character.includes(lorebookState.currentBook)) {
-          void selectWorldBook(lorebookState.boundBooks.character[0]);
+          const remembered = lorebookState.scopeBooks.character;
+          const target = (remembered && lorebookState.boundBooks.character.includes(remembered))
+            ? remembered
+            : lorebookState.boundBooks.character[0];
+          void selectWorldBook(target);
+        }
+      } else if (lorebookState.bookScope === 'chat' && lorebookState.boundBooks.chat.length > 0) {
+        if (!lorebookState.boundBooks.chat.includes(lorebookState.currentBook)) {
+          const remembered = lorebookState.scopeBooks.chat;
+          const target = (remembered && lorebookState.boundBooks.chat.includes(remembered))
+            ? remembered
+            : lorebookState.boundBooks.chat[0];
+          void selectWorldBook(target);
         }
       }
     }

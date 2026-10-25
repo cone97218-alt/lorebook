@@ -69,7 +69,74 @@ export type SortOrder =
   | 'prob_desc';
 
 const LAST_BOOK_STORAGE_KEY = 'st_fluent_lorebook.last_book';
+const SCOPE_BOOKS_STORAGE_KEY = 'st_fluent_lorebook.scope_books';
+const LAST_SCOPE_STORAGE_KEY = 'st_fluent_lorebook.last_scope';
 const SORT_STORAGE_KEY = 'st_fluent_lorebook.sort_order';
+
+function loadLastScope(): BookScopeFilter {
+  try {
+    const s = localStorage.getItem(LAST_SCOPE_STORAGE_KEY) as BookScopeFilter;
+    if (s && ['all', 'character', 'chat', 'global'].includes(s)) {
+      return s;
+    }
+  } catch {}
+  return 'all';
+}
+
+function loadScopeBooks(): Record<BookScopeFilter, string> {
+  try {
+    const raw = localStorage.getItem(SCOPE_BOOKS_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return {
+        all: parsed.all || '',
+        character: parsed.character || '',
+        chat: parsed.chat || '',
+        global: parsed.global || '',
+      };
+    }
+  } catch {}
+  return { all: '', character: '', chat: '', global: '' };
+}
+
+export function saveScopeBooks(scopeBooks: Record<BookScopeFilter, string>): void {
+  try {
+    localStorage.setItem(SCOPE_BOOKS_STORAGE_KEY, JSON.stringify(scopeBooks));
+  } catch (err) {
+    console.error('[Lorebook] saveScopeBooks error:', err);
+  }
+}
+
+const BOOK_SORT_STORAGE_KEY = 'st_fluent_lorebook.book_sort_orders';
+
+export function loadBookSortOrders(): Record<string, SortOrder> {
+  try {
+    const raw = localStorage.getItem(BOOK_SORT_STORAGE_KEY);
+    if (raw) return JSON.parse(raw) || {};
+  } catch {}
+  return {};
+}
+
+export function saveBookSortOrders(map: Record<string, SortOrder>): void {
+  try {
+    localStorage.setItem(BOOK_SORT_STORAGE_KEY, JSON.stringify(map));
+  } catch (err) {
+    console.error('[Lorebook] saveBookSortOrders error:', err);
+  }
+}
+
+export function getBookSortOrder(bookName: string): SortOrder {
+  if (!bookName) return loadSortOrder();
+  const map = loadBookSortOrders();
+  return map[bookName] || loadSortOrder();
+}
+
+export function setBookSortOrder(bookName: string, sort: SortOrder): void {
+  if (!bookName) return;
+  const map = loadBookSortOrders();
+  map[bookName] = sort;
+  saveBookSortOrders(map);
+}
 
 function loadSortOrder(): SortOrder {
   try {
@@ -77,6 +144,17 @@ function loadSortOrder(): SortOrder {
   } catch {
     return 'order_asc';
   }
+}
+
+function loadInitialSortOrder(): SortOrder {
+  try {
+    const lastBook = localStorage.getItem(LAST_BOOK_STORAGE_KEY);
+    if (lastBook) {
+      const bookSort = getBookSortOrder(lastBook);
+      if (bookSort) return bookSort;
+    }
+  } catch {}
+  return loadSortOrder();
 }
 
 const GROUP_STORAGE_PREFIX = 'st_fluent_lorebook_groups:';
@@ -118,9 +196,10 @@ export const lorebookState = reactive({
   activeUid: null as number | null,
   searchQuery: '',
   filterType: 'all' as FilterType,
-  sortOrder: loadSortOrder() as SortOrder,
+  sortOrder: loadInitialSortOrder() as SortOrder,
   activeTab: 'entries' as WorldBookTab,
-  bookScope: 'all' as BookScopeFilter,
+  bookScope: loadLastScope() as BookScopeFilter,
+  scopeBooks: loadScopeBooks() as Record<BookScopeFilter, string>,
   boundBooks: { character: [], chat: [], global: [] } as BoundWorldBooks,
   expandedGroups: {} as Record<string, boolean>,
   snapshots: [] as WorldBookSnapshot[],
@@ -156,6 +235,9 @@ watch(
   val => {
     try {
       localStorage.setItem(SORT_STORAGE_KEY, val);
+      if (lorebookState.currentBook) {
+        setBookSortOrder(lorebookState.currentBook, val);
+      }
     } catch {
       /* ignore */
     }
@@ -341,17 +423,59 @@ export const filteredEntries = computed<WorldInfoEntry[]>(() => {
 });
 
 /**
- * 根据绑定范围过滤显示的世界书列表
+ * 获取指定范围下的世界书列表
  */
-export const filteredBooks = computed<string[]>(() => {
-  const scope = lorebookState.bookScope;
+export function getBooksForScope(scope: BookScopeFilter): string[] {
   if (scope === 'all') return lorebookState.books;
   const bound = lorebookState.boundBooks;
   if (scope === 'character') return lorebookState.books.filter(b => bound.character.includes(b));
   if (scope === 'chat') return lorebookState.books.filter(b => bound.chat.includes(b));
   if (scope === 'global') return lorebookState.books.filter(b => bound.global.includes(b));
   return lorebookState.books;
+}
+
+/**
+ * 根据绑定范围过滤显示的世界书列表
+ */
+export const filteredBooks = computed<string[]>(() => {
+  return getBooksForScope(lorebookState.bookScope);
 });
+
+/**
+ * 切换世界书分类范围（全部/角色卡/当前会话/全局），并自动恢复该分类下记录的世界书
+ */
+export async function switchBookScope(scope: BookScopeFilter): Promise<void> {
+  lorebookState.bookScope = scope;
+  try {
+    localStorage.setItem(LAST_SCOPE_STORAGE_KEY, scope);
+  } catch {}
+  refreshBoundBooks();
+
+  const available = getBooksForScope(scope);
+  const remembered = lorebookState.scopeBooks[scope];
+
+  let target = '';
+  if (remembered && available.includes(remembered)) {
+    target = remembered;
+  } else if (available.length > 0) {
+    target = available[0];
+  }
+
+  if (target) {
+    lorebookState.scopeBooks[scope] = target;
+    saveScopeBooks(lorebookState.scopeBooks);
+    if (target !== lorebookState.currentBook || !lorebookState.bookData) {
+      await selectWorldBook(target);
+    }
+  } else {
+    if (lorebookState.isDirty && lorebookState.currentBook) {
+      await saveImmediately(false);
+    }
+    lorebookState.currentBook = '';
+    lorebookState.bookData = null;
+    lorebookState.activeUid = null;
+  }
+}
 
 /**
  * 计算条目分组列表（仅影响显示，不污染底层逻辑）
@@ -459,19 +583,33 @@ export async function loadWorldBooks(forceReloadCurrent = false): Promise<void> 
     const list = await fetchWorldBookList(forceReloadCurrent);
     lorebookState.books = list;
 
-    // 如果还没有选择当前书，尝试读取上次浏览的或者第一本
-    if (!lorebookState.currentBook || !list.includes(lorebookState.currentBook)) {
-      const last = localStorage.getItem(LAST_BOOK_STORAGE_KEY);
-      const target = (last && list.includes(last)) ? last : (list[0] || '');
-      if (target) {
-        await selectWorldBook(target);
-      } else {
-        lorebookState.currentBook = '';
-        lorebookState.bookData = null;
-        lorebookState.activeUid = null;
+    // 根据当前范围决定目标书
+    const currentScope = lorebookState.bookScope;
+    const available = getBooksForScope(currentScope);
+    const rememberedScopeBook = lorebookState.scopeBooks[currentScope];
+    const lastGlobalBook = localStorage.getItem(LAST_BOOK_STORAGE_KEY);
+
+    let target = '';
+    if (rememberedScopeBook && available.includes(rememberedScopeBook)) {
+      target = rememberedScopeBook;
+    } else if (lorebookState.currentBook && available.includes(lorebookState.currentBook)) {
+      target = lorebookState.currentBook;
+    } else if (lastGlobalBook && available.includes(lastGlobalBook)) {
+      target = lastGlobalBook;
+    } else if (available.length > 0) {
+      target = available[0];
+    }
+
+    if (target) {
+      lorebookState.scopeBooks[currentScope] = target;
+      saveScopeBooks(lorebookState.scopeBooks);
+      if (!lorebookState.currentBook || !list.includes(lorebookState.currentBook) || target !== lorebookState.currentBook || forceReloadCurrent) {
+        await selectWorldBook(target, forceReloadCurrent, forceReloadCurrent);
       }
-    } else if (forceReloadCurrent && lorebookState.currentBook) {
-      await selectWorldBook(lorebookState.currentBook, true, true);
+    } else {
+      lorebookState.currentBook = '';
+      lorebookState.bookData = null;
+      lorebookState.activeUid = null;
     }
   } finally {
     lorebookState.isLoadingBooks = false;
@@ -493,6 +631,13 @@ function applyWorldBookData(data: WorldInfoData, name: string, keepActiveUid: bo
     }
   }
   lorebookState.bookData = data;
+  const extSort = (data as any).extensions?.sort_order;
+  if (extSort && typeof extSort === 'string') {
+    setBookSortOrder(name, extSort as SortOrder);
+    if (lorebookState.currentBook === name && lorebookState.sortOrder !== extSort) {
+      lorebookState.sortOrder = extSort as SortOrder;
+    }
+  }
   const uids = Object.keys(data.entries).map(Number);
   if (keepActiveUid && prevActiveUid !== null && uids.includes(prevActiveUid)) {
     lorebookState.activeUid = prevActiveUid;
@@ -523,7 +668,16 @@ export async function selectWorldBook(name: string, keepActiveUid = false, force
 
   const prevActiveUid = lorebookState.activeUid;
   lorebookState.currentBook = name;
+  lorebookState.scopeBooks[lorebookState.bookScope] = name;
+  saveScopeBooks(lorebookState.scopeBooks);
   localStorage.setItem(LAST_BOOK_STORAGE_KEY, name);
+
+  // 恢复该世界书绑定的条目显示方式（排序）
+  const boundSort = getBookSortOrder(name);
+  if (lorebookState.sortOrder !== boundSort) {
+    lorebookState.sortOrder = boundSort;
+  }
+
   if (!keepActiveUid) {
     lorebookState.activeUid = null;
   }
@@ -855,6 +1009,8 @@ export async function saveImmediately(showIndicator = true): Promise<boolean> {
             (entry.extensions as any).group = entry.group || '';
           }
         }
+        if (!lorebookState.bookData!.extensions) (lorebookState.bookData as any).extensions = {};
+        (lorebookState.bookData as any).extensions.sort_order = lorebookState.sortOrder;
         saveGroupStorage(lorebookState.currentBook!, lorebookState.bookData!);
 
         const ok = await saveWorldBookData(lorebookState.currentBook!, lorebookState.bookData!);
@@ -921,6 +1077,15 @@ export async function deleteCurrentBook(): Promise<boolean> {
   const ok = await deleteWorldBook(name, true);
   if (ok) {
     toast(`世界书《${name}》已删除`, 'info');
+    for (const key of Object.keys(lorebookState.scopeBooks) as BookScopeFilter[]) {
+      if (lorebookState.scopeBooks[key] === name) {
+        lorebookState.scopeBooks[key] = '';
+      }
+    }
+    saveScopeBooks(lorebookState.scopeBooks);
+    const sortMap = loadBookSortOrders();
+    delete sortMap[name];
+    saveBookSortOrders(sortMap);
     lorebookState.currentBook = '';
     lorebookState.bookData = null;
     lorebookState.activeUid = null;
@@ -944,6 +1109,18 @@ export async function renameCurrentBook(newName: string): Promise<boolean> {
   const ok = await renameWorldBook(oldName, cleanNew, lorebookState.bookData);
   if (ok) {
     toast(`已成功重命名为《${cleanNew}》`, 'success');
+    for (const key of Object.keys(lorebookState.scopeBooks) as BookScopeFilter[]) {
+      if (lorebookState.scopeBooks[key] === oldName) {
+        lorebookState.scopeBooks[key] = cleanNew;
+      }
+    }
+    saveScopeBooks(lorebookState.scopeBooks);
+    const sortMap = loadBookSortOrders();
+    if (sortMap[oldName]) {
+      sortMap[cleanNew] = sortMap[oldName];
+      delete sortMap[oldName];
+      saveBookSortOrders(sortMap);
+    }
     await syncHostWorldInfoList();
     await loadWorldBooks(true);
     await selectWorldBook(cleanNew);
@@ -1264,6 +1441,17 @@ export async function batchDeleteBooks(names: string[]): Promise<boolean> {
   const res = await batchDeleteWorldBooks(names);
   if (res.success > 0) {
     toast(`成功删除 ${res.success} 本世界书`, 'success');
+    for (const key of Object.keys(lorebookState.scopeBooks) as BookScopeFilter[]) {
+      if (names.includes(lorebookState.scopeBooks[key])) {
+        lorebookState.scopeBooks[key] = '';
+      }
+    }
+    saveScopeBooks(lorebookState.scopeBooks);
+    const sortMap = loadBookSortOrders();
+    for (const n of names) {
+      delete sortMap[n];
+    }
+    saveBookSortOrders(sortMap);
     if (names.includes(lorebookState.currentBook)) {
       lorebookState.currentBook = '';
       lorebookState.bookData = null;
