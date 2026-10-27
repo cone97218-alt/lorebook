@@ -157,10 +157,15 @@ function loadInitialSortOrder(): SortOrder {
   return loadSortOrder();
 }
 
-const GROUP_STORAGE_PREFIX = 'st_fluent_lorebook_groups:';
+const DISPLAY_GROUP_STORAGE_PREFIX = 'st_fluent_lorebook_display_groups:';
+const LEGACY_GROUP_STORAGE_PREFIX = 'st_fluent_lorebook_groups:';
 
 function getGroupStorageKey(bookName: string): string {
-  return `${GROUP_STORAGE_PREFIX}${encodeURIComponent(bookName.trim())}`;
+  return `${DISPLAY_GROUP_STORAGE_PREFIX}${encodeURIComponent(bookName.trim())}`;
+}
+
+function getLegacyGroupStorageKey(bookName: string): string {
+  return `${LEGACY_GROUP_STORAGE_PREFIX}${encodeURIComponent(bookName.trim())}`;
 }
 
 export function saveGroupStorage(bookName: string, data: WorldInfoData | null): void {
@@ -168,8 +173,9 @@ export function saveGroupStorage(bookName: string, data: WorldInfoData | null): 
   try {
     const map: Record<number, string> = {};
     for (const [uidStr, entry] of Object.entries(data.entries)) {
-      if (entry.group && entry.group.trim()) {
-        map[Number(uidStr)] = entry.group.trim();
+      const grp = (entry.display_group || (entry as any).extensions?.display_group || '').trim();
+      if (grp) {
+        map[Number(uidStr)] = grp;
       }
     }
     localStorage.setItem(getGroupStorageKey(bookName), JSON.stringify(map));
@@ -181,7 +187,7 @@ export function saveGroupStorage(bookName: string, data: WorldInfoData | null): 
 export function loadGroupStorage(bookName: string): Record<number, string> {
   if (!bookName) return {};
   try {
-    const raw = localStorage.getItem(getGroupStorageKey(bookName));
+    const raw = localStorage.getItem(getGroupStorageKey(bookName)) || localStorage.getItem(getLegacyGroupStorageKey(bookName));
     if (!raw) return {};
     return JSON.parse(raw) || {};
   } catch {
@@ -417,8 +423,9 @@ export const filteredEntries = computed<WorldInfoEntry[]>(() => {
     const contentMatch = (entry.content || '').toLowerCase().includes(query);
     const keyMatch = (entry.key || []).some(k => k.toLowerCase().includes(query));
     const secKeyMatch = (entry.keysecondary || []).some(k => k.toLowerCase().includes(query));
+    const groupMatch = (entry.display_group || '').toLowerCase().includes(query);
 
-    return commentMatch || contentMatch || keyMatch || secKeyMatch;
+    return commentMatch || contentMatch || keyMatch || secKeyMatch || groupMatch;
   });
 });
 
@@ -486,7 +493,7 @@ export const entryGroups = computed<EntryGroup[]>(() => {
   const map: Record<string, WorldInfoEntry[]> = {};
 
   for (const entry of entries) {
-    const grp = (entry.group || '').trim() || '未分组';
+    const grp = (entry.display_group || (entry as any).extensions?.display_group || '').trim() || '未分组';
     if (!map[grp]) map[grp] = [];
     map[grp].push(entry);
   }
@@ -545,7 +552,8 @@ export const bookStats = computed(() => {
       else if (e.vectorized) vectorizedCount++;
       else selectiveCount++;
     }
-    if (e.group && e.group.trim()) groups.add(e.group.trim());
+    const grp = (e.display_group || (e as any).extensions?.display_group || '').trim();
+    if (grp) groups.add(grp);
   }
 
   const estTokens = Math.ceil(totalChars * 0.75);
@@ -620,15 +628,38 @@ function applyWorldBookData(data: WorldInfoData, name: string, keepActiveUid: bo
   const localGroups = loadGroupStorage(name);
   for (const [uidStr, entry] of Object.entries(data.entries)) {
     const uid = Number(uidStr);
-    const extGroup = (entry as any).extensions?.group;
+    if (!entry.extensions) entry.extensions = {};
+
+    const extDisplayGroup = (entry.extensions as any).display_group;
     const localGrp = localGroups[uid];
-    if (!entry.group && (extGroup || localGrp)) {
-      entry.group = extGroup || localGrp || '';
+    const extLegacyGroup = (entry.extensions as any).group;
+
+    // 1. 提取 UI 专属分组 (纯前端视图归类)
+    let displayGroup = (extDisplayGroup || localGrp || '').trim();
+
+    // 2. 兼容历史版本：如果之前将 UI 分组写在 extensions.group 中
+    if (!displayGroup && extLegacyGroup) {
+      displayGroup = String(extLegacyGroup).trim();
     }
-    if (entry.group) {
-      if (!entry.extensions) entry.extensions = {};
-      (entry.extensions as any).group = entry.group;
+
+    // 3. 核心修复 bug：清除误设到酒馆原生 inclusion group 中的互斥分组！
+    // 之前本扩展误将 displayGroup 赋值给了 entry.group，导致酒馆后台注入时执行同组仅随机发一条的互斥逻辑。
+    // 如果 entry.group 与 displayGroup 相同，或者本地存储与旧拓展写入导致 entry.group 变成了该分组名，立即将其从 entry.group 解除！
+    if (displayGroup && (entry.group === displayGroup || extLegacyGroup === displayGroup)) {
+      entry.group = '';
+      if ((entry.extensions as any).group) {
+        delete (entry.extensions as any).group;
+      }
+    } else if (!displayGroup && entry.group && localGrp && entry.group === localGrp) {
+      displayGroup = entry.group;
+      entry.group = '';
+      if ((entry.extensions as any).group) {
+        delete (entry.extensions as any).group;
+      }
     }
+
+    entry.display_group = displayGroup;
+    (entry.extensions as any).display_group = displayGroup;
   }
   lorebookState.bookData = data;
   const extSort = (data as any).extensions?.sort_order;
@@ -743,7 +774,7 @@ export function addNewEntry(): WorldInfoEntry | null {
   const entry = createEntryTemplate(newUid);
 
   // 确保新词条所属分组被展开可见
-  const grp = (entry.group || '').trim() || '未分组';
+  const grp = (entry.display_group || '').trim() || '未分组';
   lorebookState.expandedGroups[grp] = true;
 
   // 清除搜索和过滤条件，防止新建词条被筛选器隐藏
@@ -785,7 +816,7 @@ export function duplicateEntry(uid: number): WorldInfoEntry | null {
   };
 
   // 确保副本所属分组展开可见
-  const grp = (cloned.group || '').trim() || '未分组';
+  const grp = (cloned.display_group || '').trim() || '未分组';
   lorebookState.expandedGroups[grp] = true;
 
   // 清除搜索和过滤条件，防止复制后的词条被过滤隐藏
@@ -1004,9 +1035,14 @@ export async function saveImmediately(showIndicator = true): Promise<boolean> {
         }
 
         for (const entry of Object.values(lorebookState.bookData!.entries)) {
-          if (entry.group !== undefined) {
-            if (!entry.extensions) entry.extensions = {};
-            (entry.extensions as any).group = entry.group || '';
+          if (!entry.extensions) entry.extensions = {};
+          if (entry.display_group !== undefined) {
+            (entry.extensions as any).display_group = (entry.display_group || '').trim();
+          }
+          if (entry.group) {
+            (entry.extensions as any).group = entry.group;
+          } else if ((entry.extensions as any)?.group) {
+            delete (entry.extensions as any).group;
           }
         }
         if (!lorebookState.bookData!.extensions) (lorebookState.bookData as any).extensions = {};
@@ -1405,10 +1441,10 @@ export async function batchSetGroup(groupName: string): Promise<void> {
   for (const uid of lorebookState.selectedUids) {
     const entry = lorebookState.bookData.entries[uid];
     if (entry) {
-      prevGroups[uid] = entry.group || '';
-      entry.group = cleanGrp;
+      prevGroups[uid] = entry.display_group || '';
+      entry.display_group = cleanGrp;
       if (!entry.extensions) entry.extensions = {};
-      (entry.extensions as any).group = cleanGrp;
+      (entry.extensions as any).display_group = cleanGrp;
     }
   }
   saveGroupStorage(lorebookState.currentBook, lorebookState.bookData);
@@ -1421,9 +1457,9 @@ export async function batchSetGroup(groupName: string): Promise<void> {
     for (const [uStr, grp] of Object.entries(prevGroups)) {
       const e = lorebookState.bookData.entries[Number(uStr)];
       if (e) {
-        e.group = grp;
+        e.display_group = grp;
         if (!e.extensions) e.extensions = {};
-        (e.extensions as any).group = grp;
+        (e.extensions as any).display_group = grp;
       }
     }
     saveGroupStorage(lorebookState.currentBook, lorebookState.bookData);

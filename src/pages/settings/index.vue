@@ -438,6 +438,15 @@ const iconGuides = [
             </div>
             <input v-model="ui.editorShowAutomation" type="checkbox" class="toggle-checkbox" />
           </div>
+
+          <!-- 互斥组 -->
+          <div class="switch-row sub-switch-row">
+            <div class="switch-info">
+              <span class="switch-title">互斥组 (Inclusion Group)</span>
+              <span class="switch-desc">酒馆原生互斥组，同组条目每次仅激活一条</span>
+            </div>
+            <input v-model="ui.editorShowInclusionGroup" type="checkbox" class="toggle-checkbox" />
+          </div>
         </div>
       </div>
     </div>

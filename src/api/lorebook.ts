@@ -19,6 +19,7 @@ export interface WorldInfoEntry {
   probability: number;
   useProbability: boolean;
   depth: number;
+  display_group?: string;
   group: string;
   groupOverride: boolean;
   groupWeight: number;
@@ -789,6 +790,7 @@ export function createEntryTemplate(uid: number): WorldInfoEntry {
     probability: 100,
     useProbability: true,
     depth: 4,
+    display_group: '',
     group: '',
     groupOverride: false,
     groupWeight: 100,

@@ -52,6 +52,7 @@ export interface UiState {
   editorShowScanDepth: boolean;
   editorShowRecursion: boolean;
   editorShowAutomation: boolean;
+  editorShowInclusionGroup: boolean;
   showVectorized: boolean;
   replaceNativeWorldBook: boolean;
 }
@@ -94,6 +95,7 @@ export const ui = reactive<UiState>({
   editorShowScanDepth: extensionSettings.editorShowScanDepth,
   editorShowRecursion: extensionSettings.editorShowRecursion,
   editorShowAutomation: extensionSettings.editorShowAutomation,
+  editorShowInclusionGroup: extensionSettings.editorShowInclusionGroup,
   showVectorized: extensionSettings.showVectorized,
   replaceNativeWorldBook: extensionSettings.replaceNativeWorldBook,
 });
@@ -124,6 +126,7 @@ onSettingsReady(() => {
   ui.editorShowScanDepth = extensionSettings.editorShowScanDepth;
   ui.editorShowRecursion = extensionSettings.editorShowRecursion;
   ui.editorShowAutomation = extensionSettings.editorShowAutomation;
+  ui.editorShowInclusionGroup = extensionSettings.editorShowInclusionGroup;
   ui.showVectorized = extensionSettings.showVectorized;
   ui.replaceNativeWorldBook = extensionSettings.replaceNativeWorldBook;
 });
@@ -155,6 +158,7 @@ watch(
     ui.editorShowScanDepth,
     ui.editorShowRecursion,
     ui.editorShowAutomation,
+    ui.editorShowInclusionGroup,
     ui.showVectorized,
     ui.replaceNativeWorldBook,
   ],
@@ -184,6 +188,7 @@ watch(
     extensionSettings.editorShowScanDepth = ui.editorShowScanDepth;
     extensionSettings.editorShowRecursion = ui.editorShowRecursion;
     extensionSettings.editorShowAutomation = ui.editorShowAutomation;
+    extensionSettings.editorShowInclusionGroup = ui.editorShowInclusionGroup;
     extensionSettings.showVectorized = ui.showVectorized;
     extensionSettings.replaceNativeWorldBook = ui.replaceNativeWorldBook;
   },

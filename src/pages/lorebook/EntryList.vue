@@ -739,10 +739,16 @@ function handleExecuteBatchGroup() {
                 <!-- 停用状态注明 -->
                 <span v-if="entry.disable" class="badge-tag tag-gray">已停用</span>
 
-                <!-- 所属分组徽章 (如果已设置分组) -->
-                <span v-if="entry.group && entry.group.trim()" class="badge-tag tag-group">
+                <!-- 所属分组徽章 (纯 UI 视觉分类) -->
+                <span v-if="entry.display_group && entry.display_group.trim()" class="badge-tag tag-group" :title="`所属 UI 分组: ${entry.display_group}`">
                   <i class="fa-solid fa-folder"></i>
-                  {{ entry.group }}
+                  {{ entry.display_group }}
+                </span>
+
+                <!-- 酒馆原生互斥组徽章 (如果条目配置了原生互斥组) -->
+                <span v-if="entry.group && entry.group.trim()" class="badge-tag tag-mutex" :title="`酒馆原生互斥组 (同组每次仅随机/评分激活一条): ${entry.group}`">
+                  <i class="fa-solid fa-arrows-split-up-and-left"></i>
+                  互斥: {{ entry.group }}
                 </span>
 
                 <!-- 位置与深度注明 -->
@@ -900,6 +906,10 @@ function handleExecuteBatchGroup() {
                       <i class="fa-solid fa-caret-down pill-dropdown-arrow"></i>
                     </div>
                     <span v-if="entry.disable" class="badge-tag tag-gray">已停用</span>
+                    <span v-if="entry.group && entry.group.trim()" class="badge-tag tag-mutex" :title="`酒馆原生互斥组 (同组每次仅随机/评分激活一条): ${entry.group}`">
+                      <i class="fa-solid fa-arrows-split-up-and-left"></i>
+                      互斥: {{ entry.group }}
+                    </span>
                     <span v-if="entry.position === 4" class="badge-tag tag-depth">@D{{ entry.depth ?? 4 }}</span>
                     <span v-else-if="entry.position === 0" class="badge-tag tag-pos">角色前</span>
                     <span v-else-if="entry.position === 1" class="badge-tag tag-pos">角色后</span>
@@ -2379,6 +2389,15 @@ function handleExecuteBatchGroup() {
   background: rgba(107, 140, 168, 0.1);
   color: #6b8ca8;
   border: 1px solid rgba(107, 140, 168, 0.2);
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.tag-mutex {
+  background: rgba(220, 120, 50, 0.12);
+  color: #d97736;
+  border: 1px solid rgba(220, 120, 50, 0.25);
   display: inline-flex;
   align-items: center;
   gap: 3px;

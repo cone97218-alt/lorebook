@@ -58,10 +58,40 @@ const existingGroups = computed(() => {
   if (!lorebookState.bookData) return [];
   const set = new Set<string>();
   for (const e of Object.values(lorebookState.bookData.entries)) {
+    const grp = (e.display_group || (e as any).extensions?.display_group || '').trim();
+    if (grp) set.add(grp);
+  }
+  return Array.from(set).sort();
+});
+
+const existingInclusionGroups = computed(() => {
+  if (!lorebookState.bookData) return [];
+  const set = new Set<string>();
+  for (const e of Object.values(lorebookState.bookData.entries)) {
     if (e.group && e.group.trim()) set.add(e.group.trim());
   }
   return Array.from(set).sort();
 });
+
+function onDisplayGroupInput() {
+  if (activeEntry.value) {
+    if (!activeEntry.value.extensions) activeEntry.value.extensions = {};
+    (activeEntry.value.extensions as any).display_group = (activeEntry.value.display_group || '').trim();
+  }
+  markDirty();
+}
+
+function onInclusionGroupInput() {
+  if (activeEntry.value) {
+    if (!activeEntry.value.extensions) activeEntry.value.extensions = {};
+    if (activeEntry.value.group && activeEntry.value.group.trim()) {
+      (activeEntry.value.extensions as any).group = activeEntry.value.group.trim();
+    } else {
+      delete (activeEntry.value.extensions as any).group;
+    }
+  }
+  markDirty();
+}
 
 // 本地输入解耦：击键期间 100% 原生接管，牺牲即时性以保证击键绝对无卡顿
 const titleInputRef = ref<HTMLInputElement | null>(null);
@@ -1076,19 +1106,35 @@ onDeactivated(() => {
               />
             </div>
 
-            <!-- 所属分组 (只影响显示归类) -->
+            <!-- 所属分组 (纯 UI 视觉分类展示，不影响任何底层互斥与激活逻辑) -->
             <div class="drawer-field-row">
               <span class="drawer-field-label">所属分组</span>
               <input
-                v-model="activeEntry.group"
-                @input="markDirty"
+                v-model="activeEntry.display_group"
+                @input="onDisplayGroupInput"
                 type="text"
                 class="drawer-input"
-                placeholder="未分组 (可输入或创建)"
+                placeholder="未分组 (纯 UI 归类展示，不影响激活)"
                 list="existing-groups-datalist"
               />
               <datalist id="existing-groups-datalist">
                 <option v-for="g in existingGroups" :key="g" :value="g" />
+              </datalist>
+            </div>
+
+            <!-- 原生互斥组：根据 ui.editorShowInclusionGroup 显示 -->
+            <div v-if="ui.editorShowInclusionGroup" class="drawer-field-row">
+              <span class="drawer-field-label">互斥组</span>
+              <input
+                v-model="activeEntry.group"
+                @input="onInclusionGroupInput"
+                type="text"
+                class="drawer-input"
+                placeholder="留空不互斥 (同组每次仅激活一条)"
+                list="existing-inclusion-groups-datalist"
+              />
+              <datalist id="existing-inclusion-groups-datalist">
+                <option v-for="g in existingInclusionGroups" :key="g" :value="g" />
               </datalist>
             </div>
 

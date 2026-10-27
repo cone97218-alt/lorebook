@@ -71,6 +71,7 @@ export interface ExtensionSettings {
   editorShowScanDepth: boolean;
   editorShowRecursion: boolean;
   editorShowAutomation: boolean;
+  editorShowInclusionGroup: boolean;
   replaceNativeWorldBook: boolean;
 }
 
@@ -105,6 +106,7 @@ export function defaultSettings(): ExtensionSettings {
     editorShowScanDepth: false,
     editorShowRecursion: true,
     editorShowAutomation: false,
+    editorShowInclusionGroup: false,
     replaceNativeWorldBook: false,
   };
 }
@@ -174,6 +176,7 @@ function normalize(raw: unknown): ExtensionSettings {
     editorShowScanDepth: typeof obj.editorShowScanDepth === 'boolean' ? obj.editorShowScanDepth : d.editorShowScanDepth,
     editorShowRecursion: typeof obj.editorShowRecursion === 'boolean' ? obj.editorShowRecursion : d.editorShowRecursion,
     editorShowAutomation: typeof obj.editorShowAutomation === 'boolean' ? obj.editorShowAutomation : d.editorShowAutomation,
+    editorShowInclusionGroup: typeof obj.editorShowInclusionGroup === 'boolean' ? obj.editorShowInclusionGroup : d.editorShowInclusionGroup,
     replaceNativeWorldBook: typeof obj.replaceNativeWorldBook === 'boolean' ? obj.replaceNativeWorldBook : d.replaceNativeWorldBook,
   };
 }
