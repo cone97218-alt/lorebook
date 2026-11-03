@@ -10,6 +10,10 @@ import {
   syncHostWorldInfoList,
   renameWorldBook,
   getBoundWorldBooks,
+  setCharacterPrimaryWorldBook,
+  setCharacterAuxWorldBook,
+  setChatWorldBook,
+  setGlobalWorldBook,
   getCachedWorldBookData,
   createEntryTemplate,
   getFreeUid,
@@ -159,6 +163,7 @@ function loadInitialSortOrder(): SortOrder {
 
 const DISPLAY_GROUP_STORAGE_PREFIX = 'st_fluent_lorebook_display_groups:';
 const LEGACY_GROUP_STORAGE_PREFIX = 'st_fluent_lorebook_groups:';
+const GROUP_ORDER_STORAGE_PREFIX = 'st_fluent_lorebook_group_order:';
 
 function getGroupStorageKey(bookName: string): string {
   return `${DISPLAY_GROUP_STORAGE_PREFIX}${encodeURIComponent(bookName.trim())}`;
@@ -166,6 +171,31 @@ function getGroupStorageKey(bookName: string): string {
 
 function getLegacyGroupStorageKey(bookName: string): string {
   return `${LEGACY_GROUP_STORAGE_PREFIX}${encodeURIComponent(bookName.trim())}`;
+}
+
+function getGroupOrderStorageKey(bookName: string): string {
+  return `${GROUP_ORDER_STORAGE_PREFIX}${encodeURIComponent(bookName.trim())}`;
+}
+
+export function saveGroupOrderStorage(bookName: string, order: string[]): void {
+  if (!bookName) return;
+  try {
+    localStorage.setItem(getGroupOrderStorageKey(bookName), JSON.stringify(order));
+  } catch (err) {
+    console.error('[Lorebook] saveGroupOrderStorage error:', err);
+  }
+}
+
+export function loadGroupOrderStorage(bookName: string): string[] {
+  if (!bookName) return [];
+  try {
+    const raw = localStorage.getItem(getGroupOrderStorageKey(bookName));
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((g): g is string => typeof g === 'string' && Boolean(g)) : [];
+  } catch {
+    return [];
+  }
 }
 
 export function saveGroupStorage(bookName: string, data: WorldInfoData | null): void {
@@ -206,7 +236,17 @@ export const lorebookState = reactive({
   activeTab: 'entries' as WorldBookTab,
   bookScope: loadLastScope() as BookScopeFilter,
   scopeBooks: loadScopeBooks() as Record<BookScopeFilter, string>,
-  boundBooks: { character: [], chat: [], global: [] } as BoundWorldBooks,
+  boundBooks: {
+    character: [],
+    characterPrimary: '',
+    characterAux: [],
+    chat: [],
+    global: [],
+    hasCharacter: false,
+    characterName: '',
+    hasChat: false,
+  } as BoundWorldBooks,
+  groupOrder: [] as string[],
   expandedGroups: {} as Record<string, boolean>,
   snapshots: [] as WorldBookSnapshot[],
   lastActivationBatch: null as WorldInfoActivationBatch | null,
@@ -485,7 +525,7 @@ export async function switchBookScope(scope: BookScopeFilter): Promise<void> {
 }
 
 /**
- * 计算条目分组列表（仅影响显示，不污染底层逻辑）
+ * 计算条目分组列表（仅影响显示，不污染底层逻辑，支持按分组自定义顺序排序）
  */
 export const entryGroups = computed<EntryGroup[]>(() => {
   if (!lorebookState.bookData) return [];
@@ -498,7 +538,13 @@ export const entryGroups = computed<EntryGroup[]>(() => {
     map[grp].push(entry);
   }
 
+  const orderList = lorebookState.groupOrder;
   const keys = Object.keys(map).sort((a, b) => {
+    const idxA = orderList.indexOf(a);
+    const idxB = orderList.indexOf(b);
+    if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+    if (idxA !== -1) return -1;
+    if (idxB !== -1) return 1;
     if (a === '未分组') return 1;
     if (b === '未分组') return -1;
     return a.localeCompare(b);
@@ -668,6 +714,14 @@ function applyWorldBookData(data: WorldInfoData, name: string, keepActiveUid: bo
     if (lorebookState.currentBook === name && lorebookState.sortOrder !== extSort) {
       lorebookState.sortOrder = extSort as SortOrder;
     }
+  }
+  const extGroupOrder = (data as any).extensions?.display_group_order;
+  const localGroupOrder = loadGroupOrderStorage(name);
+  if (Array.isArray(extGroupOrder) && extGroupOrder.length > 0) {
+    lorebookState.groupOrder = extGroupOrder.filter((g): g is string => typeof g === 'string' && Boolean(g));
+    saveGroupOrderStorage(name, lorebookState.groupOrder);
+  } else {
+    lorebookState.groupOrder = localGroupOrder;
   }
   const uids = Object.keys(data.entries).map(Number);
   if (keepActiveUid && prevActiveUid !== null && uids.includes(prevActiveUid)) {
@@ -1047,7 +1101,11 @@ export async function saveImmediately(showIndicator = true): Promise<boolean> {
         }
         if (!lorebookState.bookData!.extensions) (lorebookState.bookData as any).extensions = {};
         (lorebookState.bookData as any).extensions.sort_order = lorebookState.sortOrder;
+        if (lorebookState.groupOrder.length > 0) {
+          (lorebookState.bookData as any).extensions.display_group_order = [...lorebookState.groupOrder];
+        }
         saveGroupStorage(lorebookState.currentBook!, lorebookState.bookData!);
+        saveGroupOrderStorage(lorebookState.currentBook!, lorebookState.groupOrder);
 
         const ok = await saveWorldBookData(lorebookState.currentBook!, lorebookState.bookData!);
 
@@ -1122,9 +1180,14 @@ export async function deleteCurrentBook(): Promise<boolean> {
     const sortMap = loadBookSortOrders();
     delete sortMap[name];
     saveBookSortOrders(sortMap);
+    try {
+      localStorage.removeItem(getGroupStorageKey(name));
+      localStorage.removeItem(getGroupOrderStorageKey(name));
+    } catch {}
     lorebookState.currentBook = '';
     lorebookState.bookData = null;
     lorebookState.activeUid = null;
+    lorebookState.groupOrder = [];
     await syncHostWorldInfoList();
     await loadWorldBooks(true);
   } else {
@@ -1157,6 +1220,13 @@ export async function renameCurrentBook(newName: string): Promise<boolean> {
       delete sortMap[oldName];
       saveBookSortOrders(sortMap);
     }
+    const oldOrder = loadGroupOrderStorage(oldName);
+    if (oldOrder.length > 0) {
+      saveGroupOrderStorage(cleanNew, oldOrder);
+    }
+    try {
+      localStorage.removeItem(getGroupOrderStorageKey(oldName));
+    } catch {}
     await syncHostWorldInfoList();
     await loadWorldBooks(true);
     await selectWorldBook(cleanNew);
@@ -1164,6 +1234,94 @@ export async function renameCurrentBook(newName: string): Promise<boolean> {
     toast('重命名失败，可能名称重名或非法', 'warning');
   }
   return ok;
+}
+
+/**
+ * 绑定 / 解绑当前世界书为角色卡主世界书
+ */
+export async function toggleCharacterPrimaryBind(bookName?: string): Promise<boolean> {
+  const target = bookName || lorebookState.currentBook;
+  if (!target) return false;
+  const prevPrimary = lorebookState.boundBooks.characterPrimary;
+  const res = await setCharacterPrimaryWorldBook(target);
+  refreshBoundBooks();
+  if (res.ok) {
+    toast(res.message, 'success');
+    recordAction(res.message, async () => {
+      await setCharacterPrimaryWorldBook(prevPrimary || target, Boolean(prevPrimary));
+      refreshBoundBooks();
+      toast('已撤回角色卡主世界书绑定变更', 'info');
+    });
+  } else {
+    toast(res.message, 'warning');
+  }
+  return res.ok;
+}
+
+/**
+ * 绑定 / 解绑当前世界书为角色卡附加世界书
+ */
+export async function toggleCharacterAuxBind(bookName?: string): Promise<boolean> {
+  const target = bookName || lorebookState.currentBook;
+  if (!target) return false;
+  const wasBound = lorebookState.boundBooks.characterAux.includes(target);
+  const res = await setCharacterAuxWorldBook(target);
+  refreshBoundBooks();
+  if (res.ok) {
+    toast(res.message, 'success');
+    recordAction(res.message, async () => {
+      await setCharacterAuxWorldBook(target, wasBound);
+      refreshBoundBooks();
+      toast('已撤回角色卡附加世界书绑定变更', 'info');
+    });
+  } else {
+    toast(res.message, 'warning');
+  }
+  return res.ok;
+}
+
+/**
+ * 绑定 / 解绑当前世界书到当前聊天会话
+ */
+export async function toggleChatBind(bookName?: string): Promise<boolean> {
+  const target = bookName || lorebookState.currentBook;
+  if (!target) return false;
+  const prevChatBook = lorebookState.boundBooks.chat[0] || '';
+  const res = await setChatWorldBook(target);
+  refreshBoundBooks();
+  if (res.ok) {
+    toast(res.message, 'success');
+    recordAction(res.message, async () => {
+      await setChatWorldBook(prevChatBook || target, Boolean(prevChatBook));
+      refreshBoundBooks();
+      toast('已撤回聊天会话世界书绑定变更', 'info');
+    });
+  } else {
+    toast(res.message, 'warning');
+  }
+  return res.ok;
+}
+
+/**
+ * 绑定 / 解绑当前世界书为全局世界书
+ */
+export async function toggleGlobalBind(bookName?: string): Promise<boolean> {
+  const target = bookName || lorebookState.currentBook;
+  if (!target) return false;
+  const wasBound = lorebookState.boundBooks.global.includes(target);
+  const res = await setGlobalWorldBook(target);
+  refreshBoundBooks();
+  if (res.ok) {
+    toast(res.message, 'success');
+    recordAction(res.message, async () => {
+      await setGlobalWorldBook(target, wasBound);
+      refreshBoundBooks();
+      toast('已撤回全局世界书绑定变更', 'info');
+    });
+  } else {
+    toast(res.message, 'warning');
+  }
+  return res.ok;
 }
 
 /**
@@ -1187,6 +1345,93 @@ export async function toggleGroupEnabled(groupName: string): Promise<void> {
  */
 export function toggleGroupFold(groupName: string): void {
   lorebookState.expandedGroups[groupName] = !lorebookState.expandedGroups[groupName];
+}
+
+/**
+ * 获取当前完整分组名称顺序列表（包含所有已知分组）
+ */
+function getFullGroupOrderList(): string[] {
+  const currentVisible = entryGroups.value.map(g => g.name);
+  const result = [...currentVisible];
+  for (const g of lorebookState.groupOrder) {
+    if (!result.includes(g)) {
+      result.push(g);
+    }
+  }
+  return result;
+}
+
+/**
+ * 拖拽调整分组顺序：将 srcGroup 移动到 targetGroup 的 before 或 after 位置
+ */
+export function reorderGroups(srcGroup: string, targetGroup: string, position: 'before' | 'after'): void {
+  if (!lorebookState.currentBook || !lorebookState.bookData || srcGroup === targetGroup) return;
+  const list = entryGroups.value.map(g => g.name);
+  const srcIdx = list.indexOf(srcGroup);
+  const dstIdx = list.indexOf(targetGroup);
+  if (srcIdx === -1 || dstIdx === -1) return;
+
+  const prevOrder = [...getFullGroupOrderList()];
+  const [moved] = list.splice(srcIdx, 1);
+  let insertIdx = list.indexOf(targetGroup);
+  if (position === 'after') insertIdx += 1;
+  list.splice(insertIdx, 0, moved);
+
+  // 保留因过滤暂时隐藏的分组顺序
+  for (const g of lorebookState.groupOrder) {
+    if (!list.includes(g)) list.push(g);
+  }
+
+  lorebookState.groupOrder = list;
+  saveGroupOrderStorage(lorebookState.currentBook, list);
+  markDirty();
+  void saveImmediately(false);
+
+  recordAction(`调整分组「${srcGroup}」排序位置`, () => {
+    lorebookState.groupOrder = prevOrder;
+    if (lorebookState.currentBook) {
+      saveGroupOrderStorage(lorebookState.currentBook, prevOrder);
+    }
+    markDirty();
+    void saveImmediately(false);
+    toast(`已撤回分组「${srcGroup}」的排序调整`, 'info');
+  });
+}
+
+/**
+ * 上移 / 下移指定分组
+ */
+export function moveGroupOrder(groupName: string, delta: -1 | 1): void {
+  if (!lorebookState.currentBook || !lorebookState.bookData) return;
+  const list = entryGroups.value.map(g => g.name);
+  const idx = list.indexOf(groupName);
+  if (idx === -1) return;
+  const targetIdx = idx + delta;
+  if (targetIdx < 0 || targetIdx >= list.length) return;
+
+  const prevOrder = [...getFullGroupOrderList()];
+  const temp = list[idx];
+  list[idx] = list[targetIdx];
+  list[targetIdx] = temp;
+
+  for (const g of lorebookState.groupOrder) {
+    if (!list.includes(g)) list.push(g);
+  }
+
+  lorebookState.groupOrder = list;
+  saveGroupOrderStorage(lorebookState.currentBook, list);
+  markDirty();
+  void saveImmediately(false);
+
+  recordAction(`${delta < 0 ? '上移' : '下移'}分组「${groupName}」`, () => {
+    lorebookState.groupOrder = prevOrder;
+    if (lorebookState.currentBook) {
+      saveGroupOrderStorage(lorebookState.currentBook, prevOrder);
+    }
+    markDirty();
+    void saveImmediately(false);
+    toast(`已撤回分组「${groupName}」的顺序移动`, 'info');
+  });
 }
 
 /**

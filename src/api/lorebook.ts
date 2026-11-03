@@ -63,13 +63,17 @@ function getHeaders(): Record<string, string> {
  * 直接操作酒馆内建的全局 worldInfoCache、selected_world_info、world_names 及编辑抽屉
  */
 let hostWIModulePromise: Promise<any> | null = null;
+let cachedHostWI: any = null;
 
 export async function getHostWorldInfo(): Promise<any> {
+  if (cachedHostWI) return cachedHostWI;
   if (hostWIModulePromise) return hostWIModulePromise;
   hostWIModulePromise = (async () => {
     try {
       const dynamicImport = new Function('url', 'return import(url)');
-      return await dynamicImport('/scripts/world-info.js');
+      const mod = await dynamicImport('/scripts/world-info.js');
+      cachedHostWI = mod;
+      return mod;
     } catch (err) {
       console.warn('[Lorebook] Could not dynamically load /scripts/world-info.js', err);
       return null;
@@ -77,6 +81,9 @@ export async function getHostWorldInfo(): Promise<any> {
   })();
   return hostWIModulePromise;
 }
+
+// 预热加载宿主 world-info 模块，确保同步函数（如 getBoundWorldBooks）可即时访问 cachedHostWI
+void getHostWorldInfo();
 
 /**
  * 读取世界书缓存（对齐酒馆原生 worldInfoCache，实现 0ms 瞬间秒开）
@@ -681,38 +688,65 @@ export async function renameWorldBook(oldName: string, newName: string, data: Wo
 
 export interface BoundWorldBooks {
   character: string[];
+  characterPrimary: string;
+  characterAux: string[];
   chat: string[];
   global: string[];
+  hasCharacter: boolean;
+  characterName: string;
+  hasChat: boolean;
 }
 
 /**
- * 探测与当前角色卡、当前聊天以及全局绑定的世界书
+ * 探测与当前角色卡（主世界书 + 附加世界书）、当前聊天以及全局绑定的世界书
  */
 export function getBoundWorldBooks(): BoundWorldBooks {
   const result: BoundWorldBooks = {
     character: [],
+    characterPrimary: '',
+    characterAux: [],
     chat: [],
     global: [],
+    hasCharacter: false,
+    characterName: '',
+    hasChat: false,
   };
 
   const ctx = getContext();
   if (!ctx) return result;
 
-  // 1. 角色卡绑定世界书
+  // 1. 角色卡绑定世界书（主世界书 + 附加世界书）
   try {
     const chid = ctx.characterId;
-    if (chid !== undefined && ctx.characters && ctx.characters[chid as any]) {
+    if (chid !== undefined && chid !== null && chid !== '' && ctx.characters && ctx.characters[chid as any]) {
       const char = ctx.characters[chid as any] as any;
+      result.hasCharacter = true;
+      result.characterName = char.name || char.data?.name || '';
+
       const worldName = char.data?.extensions?.world || char.world;
       if (worldName && typeof worldName === 'string') {
+        result.characterPrimary = worldName;
         result.character.push(worldName);
       }
-      const charLore = ctx.world_info?.charLore || (window as any).world_info?.charLore;
+
+      const fileName = typeof char.avatar === 'string' ? char.avatar.replace(/\.[^/.]+$/, '') : '';
+      const charLore =
+        cachedHostWI?.world_info?.charLore ||
+        ctx.world_info?.charLore ||
+        (window as any).world_info?.charLore;
       if (Array.isArray(charLore)) {
-        const extra = charLore.find((e: any) => e.name === char.avatar || e.name === char.name);
+        const extra = charLore.find(
+          (e: any) =>
+            (fileName && e.name === fileName) ||
+            (char.avatar && e.name === char.avatar) ||
+            (char.name && e.name === char.name),
+        );
         if (extra && Array.isArray(extra.extraBooks)) {
           for (const b of extra.extraBooks) {
-            if (b && !result.character.includes(b)) result.character.push(b);
+            if (b && typeof b === 'string') {
+              if (!result.characterAux.includes(b)) result.characterAux.push(b);
+              if (!result.character.includes(b)) result.character.push(b);
+            }
           }
         }
       }
@@ -723,6 +757,8 @@ export function getBoundWorldBooks(): BoundWorldBooks {
 
   // 2. 当前聊天绑定世界书
   try {
+    const chatId = ctx.getCurrentChatId?.();
+    result.hasChat = Boolean(chatId);
     const chatMeta = ctx.chatMetadata;
     if (chatMeta) {
       const wi = chatMeta.world_info || chatMeta['world_info'];
@@ -740,17 +776,308 @@ export function getBoundWorldBooks(): BoundWorldBooks {
 
   // 3. 全局生效世界书
   try {
-    const globalSelect = ctx.world_info?.globalSelect || (window as any).world_info?.globalSelect || (window as any).selected_world_info;
+    const globalSelect =
+      cachedHostWI?.selected_world_info ||
+      cachedHostWI?.world_info?.globalSelect ||
+      ctx.world_info?.globalSelect ||
+      (window as any).world_info?.globalSelect ||
+      (window as any).selected_world_info;
     if (Array.isArray(globalSelect)) {
       for (const b of globalSelect) {
         if (typeof b === 'string' && b && !result.global.includes(b)) result.global.push(b);
       }
+    } else {
+      // DOM 回退探测
+      const checkedOpts = document.querySelectorAll<HTMLOptionElement>('#world_info option:checked');
+      checkedOpts.forEach(opt => {
+        const name = (opt.textContent || opt.text || '').trim();
+        if (name && !result.global.includes(name)) {
+          result.global.push(name);
+        }
+      });
     }
   } catch (err) {
     console.debug('[Lorebook] Error reading global bound books:', err);
   }
 
   return result;
+}
+
+/**
+ * 绑定 / 解绑角色卡主世界书（对齐酒馆原生 data.extensions.world 与 #character_world）
+ */
+export async function setCharacterPrimaryWorldBook(bookName: string, bind?: boolean): Promise<{ ok: boolean; bound: boolean; message: string }> {
+  const ctx = getContext();
+  const chid = ctx?.characterId;
+  if (!ctx || chid === undefined || chid === null || chid === '' || !ctx.characters?.[chid as any]) {
+    return { ok: false, bound: false, message: '当前未选中任何角色卡' };
+  }
+
+  const char = ctx.characters[chid as any] as any;
+  const currentPrimary = char.data?.extensions?.world || char.world || '';
+  const shouldBind = bind !== undefined ? bind : currentPrimary !== bookName;
+  const targetWorld = shouldBind ? bookName : '';
+
+  try {
+    const hostWI = await getHostWorldInfo();
+
+    // 1. 更新内存中的角色卡对象
+    if (!char.data) char.data = {};
+    if (!char.data.extensions) char.data.extensions = {};
+    char.data.extensions.world = targetWorld;
+    char.world = targetWorld;
+
+    // 2. 调用酒馆官方 writeExtensionField 写回服务端与 json_data
+    if (typeof ctx.writeExtensionField === 'function') {
+      await ctx.writeExtensionField(chid, 'world', targetWorld);
+    } else {
+      const res = await fetch('/api/characters/merge-attributes', {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({
+          avatar: char.avatar,
+          data: {
+            extensions: {
+              world: targetWorld,
+            },
+          },
+        }),
+      });
+      if (!res.ok) {
+        return { ok: false, bound: !shouldBind, message: '保存角色卡绑定失败' };
+      }
+    }
+
+    // 3. 同步更新酒馆原生 DOM 与世界书图标高亮状态
+    try {
+      $('#character_world').val(targetWorld);
+      if (typeof hostWI?.setWorldInfoButtonClass === 'function') {
+        hostWI.setWorldInfoButtonClass(chid, Boolean(targetWorld));
+      } else {
+        $('#set_character_world, #world_button').toggleClass('world_set', Boolean(targetWorld));
+      }
+    } catch {
+      /* ignore */
+    }
+
+    const charDisplayName = char.name || char.data?.name || '当前角色';
+    return {
+      ok: true,
+      bound: shouldBind,
+      message: shouldBind
+        ? `已将《${bookName}》设为「${charDisplayName}」的主世界书`
+        : `已解除「${charDisplayName}」的主世界书《${bookName}》`,
+    };
+  } catch (err) {
+    console.error('[Lorebook] setCharacterPrimaryWorldBook error:', err);
+    return { ok: false, bound: !shouldBind, message: '操作角色卡主世界书绑定时出错' };
+  }
+}
+
+/**
+ * 绑定 / 解绑角色卡附加世界书（对齐酒馆原生 world_info.charLore / extraBooks）
+ */
+export async function setCharacterAuxWorldBook(bookName: string, bind?: boolean): Promise<{ ok: boolean; bound: boolean; message: string }> {
+  const ctx = getContext();
+  const chid = ctx?.characterId;
+  if (!ctx || chid === undefined || chid === null || chid === '' || !ctx.characters?.[chid as any]) {
+    return { ok: false, bound: false, message: '当前未选中任何角色卡' };
+  }
+
+  const char = ctx.characters[chid as any] as any;
+  const fileName = typeof char.avatar === 'string' ? char.avatar.replace(/\.[^/.]+$/, '') : '';
+  if (!fileName) {
+    return { ok: false, bound: false, message: '无法获取当前角色卡文件名标识' };
+  }
+
+  try {
+    const hostWI = await getHostWorldInfo();
+    const wiObj = hostWI?.world_info || ctx.world_info || (window as any).world_info;
+    const charLore: Array<{ name: string; extraBooks: string[] }> = Array.isArray(wiObj?.charLore)
+      ? wiObj.charLore
+      : [];
+
+    const existingIdx = charLore.findIndex(
+      (e: any) =>
+        e.name === fileName ||
+        (char.avatar && e.name === char.avatar) ||
+        (char.name && e.name === char.name),
+    );
+    const currentBooks: string[] =
+      existingIdx !== -1 && Array.isArray(charLore[existingIdx].extraBooks)
+        ? [...charLore[existingIdx].extraBooks]
+        : [];
+
+    const isCurrentlyBound = currentBooks.includes(bookName);
+    const shouldBind = bind !== undefined ? bind : !isCurrentlyBound;
+
+    const nextBooks = shouldBind
+      ? Array.from(new Set([...currentBooks, bookName]))
+      : currentBooks.filter(b => b !== bookName);
+
+    // 优先调用酒馆原生 charSetAuxWorlds
+    if (typeof hostWI?.charSetAuxWorlds === 'function') {
+      // 如果旧记录用的是 char.avatar 或 char.name 而非标准 fileName，先清理旧项防止残留
+      if (existingIdx !== -1 && charLore[existingIdx].name !== fileName) {
+        charLore.splice(existingIdx, 1);
+      }
+      hostWI.charSetAuxWorlds(fileName, nextBooks);
+    } else if (wiObj && typeof wiObj === 'object') {
+      if (nextBooks.length === 0) {
+        if (existingIdx !== -1) charLore.splice(existingIdx, 1);
+      } else if (existingIdx === -1) {
+        charLore.push({ name: fileName, extraBooks: nextBooks });
+      } else {
+        charLore[existingIdx] = { name: fileName, extraBooks: nextBooks };
+      }
+      wiObj.charLore = charLore;
+      ctx.saveSettingsDebounced?.();
+    }
+
+    const charDisplayName = char.name || char.data?.name || '当前角色';
+    return {
+      ok: true,
+      bound: shouldBind,
+      message: shouldBind
+        ? `已将《${bookName}》添加为「${charDisplayName}」的附加世界书`
+        : `已将《${bookName}》从「${charDisplayName}」的附加世界书中移除`,
+    };
+  } catch (err) {
+    console.error('[Lorebook] setCharacterAuxWorldBook error:', err);
+    return { ok: false, bound: false, message: '操作附加世界书绑定时出错' };
+  }
+}
+
+/**
+ * 绑定 / 解绑当前聊天会话世界书（对齐酒馆原生 chat_metadata['world_info']）
+ */
+export async function setChatWorldBook(bookName: string, bind?: boolean): Promise<{ ok: boolean; bound: boolean; message: string }> {
+  const ctx = getContext();
+  const chatId = ctx?.getCurrentChatId?.();
+  if (!ctx || !chatId || !ctx.chatMetadata) {
+    return { ok: false, bound: false, message: '当前未打开任何有效聊天会话' };
+  }
+
+  const currentChatBook = ctx.chatMetadata['world_info'] || ctx.chatMetadata.world_info || '';
+  const isCurrentlyBound = currentChatBook === bookName;
+  const shouldBind = bind !== undefined ? bind : !isCurrentlyBound;
+
+  try {
+    if (shouldBind) {
+      ctx.chatMetadata['world_info'] = bookName;
+      try {
+        $('.chat_lorebook_button').addClass('world_set');
+      } catch {
+        /* ignore */
+      }
+    } else {
+      delete ctx.chatMetadata['world_info'];
+      try {
+        $('.chat_lorebook_button').removeClass('world_set');
+      } catch {
+        /* ignore */
+      }
+    }
+
+    if (typeof ctx.saveMetadata === 'function') {
+      await ctx.saveMetadata();
+    } else if (typeof ctx.saveMetadataDebounced === 'function') {
+      ctx.saveMetadataDebounced();
+    }
+
+    return {
+      ok: true,
+      bound: shouldBind,
+      message: shouldBind
+        ? `已将《${bookName}》绑定到当前聊天会话`
+        : `已解除当前聊天会话绑定的《${bookName}》`,
+    };
+  } catch (err) {
+    console.error('[Lorebook] setChatWorldBook error:', err);
+    return { ok: false, bound: !shouldBind, message: '操作聊天会话世界书绑定时出错' };
+  }
+}
+
+/**
+ * 绑定 / 解绑全局世界书（对齐酒馆原生 selected_world_info 与 #world_info）
+ */
+export async function setGlobalWorldBook(bookName: string, bind?: boolean): Promise<{ ok: boolean; bound: boolean; message: string }> {
+  const ctx = getContext();
+  if (!ctx) {
+    return { ok: false, bound: false, message: '酒馆上下文尚未就绪' };
+  }
+
+  try {
+    const hostWI = await getHostWorldInfo();
+    const currentGlobal = getBoundWorldBooks().global;
+    const isCurrentlyBound = currentGlobal.includes(bookName);
+    const shouldBind = bind !== undefined ? bind : !isCurrentlyBound;
+
+    // 1. 同步更新酒馆原生 DOM #world_info 选项选中态
+    let domUpdated = false;
+    try {
+      const worldSelect = document.querySelector<HTMLSelectElement>('#world_info');
+      if (worldSelect) {
+        Array.from(worldSelect.options).forEach(opt => {
+          const text = (opt.textContent || opt.text || '').trim();
+          if (text === bookName) {
+            opt.selected = shouldBind;
+            domUpdated = true;
+          }
+        });
+      }
+    } catch {
+      /* ignore */
+    }
+
+    // 2. 若原生 #world_info 匹配成功且支持触发原生 onWorldInfoChange，则调用以同步原生内部变量、保存及事件
+    if (domUpdated && typeof hostWI?.onWorldInfoChange === 'function') {
+      hostWI.onWorldInfoChange('__notSlashCommand__');
+    } else if (domUpdated) {
+      try {
+        $('#world_info').trigger('change');
+      } catch {
+        /* ignore */
+      }
+    }
+
+    // 3. 双保险：确保 hostWI.selected_world_info 数组与 world_info.globalSelect 精确一致
+    if (Array.isArray(hostWI?.selected_world_info)) {
+      const idx = hostWI.selected_world_info.indexOf(bookName);
+      if (shouldBind && idx === -1) {
+        hostWI.selected_world_info.push(bookName);
+      } else if (!shouldBind && idx !== -1) {
+        hostWI.selected_world_info.splice(idx, 1);
+      }
+      if (hostWI.world_info && typeof hostWI.world_info === 'object') {
+        hostWI.world_info.globalSelect = [...hostWI.selected_world_info];
+      }
+    }
+
+    ctx.saveSettingsDebounced?.();
+
+    try {
+      const eventEmitter = hostWI?.eventSource ?? ctx.eventSource;
+      const eventTypes = hostWI?.event_types ?? ctx.eventTypes;
+      if (eventEmitter?.emit) {
+        const eventName = eventTypes?.WORLDINFO_SETTINGS_UPDATED || 'worldinfo_settings_updated';
+        void eventEmitter.emit(eventName);
+      }
+    } catch {
+      /* ignore */
+    }
+
+    return {
+      ok: true,
+      bound: shouldBind,
+      message: shouldBind
+        ? `已开启全局世界书《${bookName}》`
+        : `已取消全局世界书《${bookName}》`,
+    };
+  } catch (err) {
+    console.error('[Lorebook] setGlobalWorldBook error:', err);
+    return { ok: false, bound: false, message: '操作全局世界书绑定时出错' };
+  }
 }
 
 /**

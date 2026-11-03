@@ -161,6 +161,18 @@ function bindLifecycleEvents(): void {
   es.on(et.WORLDINFO_UPDATED, (bookName: string) => {
     syncFromHost(bookName);
   });
+
+  if (et.WORLDINFO_SETTINGS_UPDATED) {
+    es.on(et.WORLDINFO_SETTINGS_UPDATED, () => {
+      refreshBoundBooks();
+    });
+  }
+
+  if (et.CHARACTER_EDITED) {
+    es.on(et.CHARACTER_EDITED, () => {
+      refreshBoundBooks();
+    });
+  }
 }
 
 function bindWhenReady(attempt = 0): void {

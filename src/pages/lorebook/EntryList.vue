@@ -20,6 +20,13 @@ import {
   renameCurrentBook,
   toggleGroupEnabled,
   toggleGroupFold,
+  reorderGroups,
+  moveGroupOrder,
+  toggleCharacterPrimaryBind,
+  toggleCharacterAuxBind,
+  toggleChatBind,
+  toggleGlobalBind,
+  refreshBoundBooks,
   takeSnapshot,
   applyBookSnapshot,
   removeBookSnapshot,
@@ -56,6 +63,8 @@ const showRenameBookModal = ref(false);
 const renameBookName = ref('');
 const showDeleteBookModal = ref(false);
 const showBookToolsMenu = ref(false);
+const showBindMenu = ref(false);
+const isBindingBusy = ref(false);
 const entryToDelete = ref<number | null>(null);
 
 const showBatchDeleteModal = ref(false);
@@ -154,7 +163,12 @@ function handleTouchEnd(e: TouchEvent) {
     // 水平手势幅度需大于 50px 且明显大于垂直移动
     if (Math.abs(deltaX) > 50 && Math.abs(deltaX) > Math.abs(deltaY) * 1.5) {
       const target = e.target as HTMLElement | null;
-      if (target?.closest('.book-scope-bar, .batch-actions-scroll, .view-tabs-bar, .modal-box, select, input')) return;
+      if (
+        target?.closest(
+          '.book-scope-bar, .batch-actions-scroll, .view-tabs-bar, .modal-box, .group-drag-handle, .group-sort-btns, .book-bind-menu, select, input'
+        )
+      )
+        return;
 
       const tabs: WorldBookTab[] = ['entries', 'groups', 'snapshots', 'monitor'];
       const curIndex = tabs.indexOf(lorebookState.activeTab);
@@ -383,6 +397,141 @@ function handleExecuteBatchGroup() {
   batchGroupName.value = '';
   showBatchGroupModal.value = false;
 }
+
+// ================= 世界书绑定状态与切换 =================
+const isCurrentBookCharPrimary = computed(() =>
+  Boolean(lorebookState.currentBook && lorebookState.boundBooks.characterPrimary === lorebookState.currentBook)
+);
+const isCurrentBookCharAux = computed(() =>
+  Boolean(lorebookState.currentBook && lorebookState.boundBooks.characterAux.includes(lorebookState.currentBook))
+);
+const isCurrentBookChat = computed(() =>
+  Boolean(lorebookState.currentBook && lorebookState.boundBooks.chat.includes(lorebookState.currentBook))
+);
+const isCurrentBookGlobal = computed(() =>
+  Boolean(lorebookState.currentBook && lorebookState.boundBooks.global.includes(lorebookState.currentBook))
+);
+
+const currentBookBindCount = computed(() => {
+  let count = 0;
+  if (isCurrentBookCharPrimary.value) count++;
+  if (isCurrentBookCharAux.value) count++;
+  if (isCurrentBookChat.value) count++;
+  if (isCurrentBookGlobal.value) count++;
+  return count;
+});
+
+function toggleBindMenu() {
+  if (!showBindMenu.value) {
+    refreshBoundBooks();
+  }
+  showBookToolsMenu.value = false;
+  showBindMenu.value = !showBindMenu.value;
+}
+
+async function handleToggleBind(type: 'charPrimary' | 'charAux' | 'chat' | 'global') {
+  if (isBindingBusy.value || !lorebookState.currentBook) return;
+  isBindingBusy.value = true;
+  try {
+    if (type === 'charPrimary') {
+      await toggleCharacterPrimaryBind();
+    } else if (type === 'charAux') {
+      await toggleCharacterAuxBind();
+    } else if (type === 'chat') {
+      await toggleChatBind();
+    } else if (type === 'global') {
+      await toggleGlobalBind();
+    }
+  } finally {
+    isBindingBusy.value = false;
+  }
+}
+
+// ================= 分组拖拽与排序 =================
+const draggedGroupName = ref<string | null>(null);
+const groupDropTarget = ref<{ name: string; position: 'before' | 'after' } | null>(null);
+
+function isGroupDropTarget(name: string, pos: 'before' | 'after'): boolean {
+  return groupDropTarget.value?.name === name && groupDropTarget.value?.position === pos;
+}
+
+function onGroupDragStart(e: DragEvent, name: string) {
+  draggedGroupName.value = name;
+  if (e.dataTransfer) {
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', name);
+  }
+}
+
+function onGroupDragOver(e: DragEvent, name: string) {
+  if (!draggedGroupName.value || draggedGroupName.value === name) {
+    groupDropTarget.value = null;
+    return;
+  }
+  e.preventDefault();
+  if (e.dataTransfer) {
+    e.dataTransfer.dropEffect = 'move';
+  }
+  const el = e.currentTarget as HTMLElement | null;
+  if (!el) return;
+  const rect = el.getBoundingClientRect();
+  const midY = rect.top + rect.height / 2;
+  const position: 'before' | 'after' = e.clientY < midY ? 'before' : 'after';
+  groupDropTarget.value = { name, position };
+}
+
+function onGroupDrop(e: DragEvent, name: string) {
+  e.preventDefault();
+  const srcName = draggedGroupName.value;
+  const target = groupDropTarget.value;
+  draggedGroupName.value = null;
+  groupDropTarget.value = null;
+  if (!srcName || srcName === name) return;
+  const pos = target && target.name === name ? target.position : 'after';
+  reorderGroups(srcName, name, pos);
+}
+
+function onGroupDragEnd() {
+  draggedGroupName.value = null;
+  groupDropTarget.value = null;
+}
+
+function onGroupTouchStart(e: TouchEvent, name: string) {
+  if (e.touches.length !== 1) return;
+  draggedGroupName.value = name;
+  groupDropTarget.value = null;
+}
+
+function onGroupTouchMove(e: TouchEvent) {
+  if (!draggedGroupName.value || e.touches.length !== 1) return;
+  if (e.cancelable) e.preventDefault();
+  const touch = e.touches[0];
+  const targetEl = document.elementFromPoint(touch.clientX, touch.clientY) as HTMLElement | null;
+  const groupCard = targetEl?.closest('.group-section-card[data-group-name]') as HTMLElement | null;
+  if (!groupCard) {
+    groupDropTarget.value = null;
+    return;
+  }
+  const targetName = groupCard.getAttribute('data-group-name') || '';
+  if (!targetName || targetName === draggedGroupName.value) {
+    groupDropTarget.value = null;
+    return;
+  }
+  const rect = groupCard.getBoundingClientRect();
+  const midY = rect.top + rect.height / 2;
+  const position: 'before' | 'after' = touch.clientY < midY ? 'before' : 'after';
+  groupDropTarget.value = { name: targetName, position };
+}
+
+function onGroupTouchEnd() {
+  const srcName = draggedGroupName.value;
+  const target = groupDropTarget.value;
+  draggedGroupName.value = null;
+  groupDropTarget.value = null;
+  if (srcName && target && srcName !== target.name) {
+    reorderGroups(srcName, target.name, target.position);
+  }
+}
 </script>
 
 <template>
@@ -451,6 +600,137 @@ function handleExecuteBatchGroup() {
           </select>
         </div>
 
+        <!-- 当前世界书绑定菜单 (角色卡主书 / 附加世界书 / 当前聊天 / 全局) -->
+        <div v-if="lorebookState.currentBook" class="book-bind-dropdown-wrapper">
+          <button
+            class="icon-btn book-bind-btn"
+            :class="{ active: showBindMenu || currentBookBindCount > 0 }"
+            @click="toggleBindMenu"
+            title="绑定当前世界书 (角色卡 / 附加 / 聊天 / 全局)"
+          >
+            <i class="fa-solid fa-link"></i>
+            <span v-if="currentBookBindCount > 0" class="bind-count-dot">{{ currentBookBindCount }}</span>
+          </button>
+
+          <div
+            v-if="showBindMenu"
+            class="book-tools-menu-backdrop"
+            @click="showBindMenu = false"
+          ></div>
+
+          <div v-if="showBindMenu" class="book-bind-menu">
+            <div class="bind-menu-header">
+              <i class="fa-solid fa-link"></i>
+              <span class="bind-menu-bookname">{{ lorebookState.currentBook }}</span>
+            </div>
+
+            <!-- 1. 绑定为角色卡主世界书 -->
+            <button
+              class="bind-menu-item"
+              :class="{ active: isCurrentBookCharPrimary, disabled: !lorebookState.boundBooks.hasCharacter || isBindingBusy }"
+              :disabled="!lorebookState.boundBooks.hasCharacter || isBindingBusy"
+              @click="handleToggleBind('charPrimary')"
+            >
+              <div class="bind-item-lead">
+                <i class="fa-solid fa-user-astronaut bind-item-icon"></i>
+                <div class="bind-item-info">
+                  <span class="bind-item-title">绑定到角色卡 (主世界书)</span>
+                  <span class="bind-item-sub">
+                    <template v-if="!lorebookState.boundBooks.hasCharacter">未选择角色卡</template>
+                    <template v-else-if="isCurrentBookCharPrimary">
+                      已绑定角色「{{ lorebookState.boundBooks.characterName || '当前角色' }}」
+                    </template>
+                    <template v-else-if="lorebookState.boundBooks.characterPrimary">
+                      当前主书: {{ lorebookState.boundBooks.characterPrimary }}
+                    </template>
+                    <template v-else>
+                      角色「{{ lorebookState.boundBooks.characterName || '当前角色' }}」暂未绑定主书
+                    </template>
+                  </span>
+                </div>
+              </div>
+              <span class="bind-switch-pill" :class="{ on: isCurrentBookCharPrimary }">
+                <span class="bind-switch-knob"></span>
+              </span>
+            </button>
+
+            <!-- 2. 绑定为角色卡附加世界书 -->
+            <button
+              class="bind-menu-item"
+              :class="{ active: isCurrentBookCharAux, disabled: !lorebookState.boundBooks.hasCharacter || isBindingBusy }"
+              :disabled="!lorebookState.boundBooks.hasCharacter || isBindingBusy"
+              @click="handleToggleBind('charAux')"
+            >
+              <div class="bind-item-lead">
+                <i class="fa-solid fa-book-medical bind-item-icon"></i>
+                <div class="bind-item-info">
+                  <span class="bind-item-title">绑定为附加世界书</span>
+                  <span class="bind-item-sub">
+                    <template v-if="!lorebookState.boundBooks.hasCharacter">未选择角色卡</template>
+                    <template v-else-if="isCurrentBookCharAux">
+                      已作为「{{ lorebookState.boundBooks.characterName || '当前角色' }}」的附加世界书
+                    </template>
+                    <template v-else>
+                      当前附加书 ({{ lorebookState.boundBooks.characterAux.length }} 本)
+                    </template>
+                  </span>
+                </div>
+              </div>
+              <span class="bind-switch-pill" :class="{ on: isCurrentBookCharAux }">
+                <span class="bind-switch-knob"></span>
+              </span>
+            </button>
+
+            <!-- 3. 绑定到当前聊天 -->
+            <button
+              class="bind-menu-item"
+              :class="{ active: isCurrentBookChat, disabled: !lorebookState.boundBooks.hasChat || isBindingBusy }"
+              :disabled="!lorebookState.boundBooks.hasChat || isBindingBusy"
+              @click="handleToggleBind('chat')"
+            >
+              <div class="bind-item-lead">
+                <i class="fa-solid fa-comments bind-item-icon"></i>
+                <div class="bind-item-info">
+                  <span class="bind-item-title">绑定到当前聊天</span>
+                  <span class="bind-item-sub">
+                    <template v-if="!lorebookState.boundBooks.hasChat">当前无活跃聊天会话</template>
+                    <template v-else-if="isCurrentBookChat">已绑定至当前聊天会话</template>
+                    <template v-else-if="lorebookState.boundBooks.chat.length">
+                      当前会话已绑: {{ lorebookState.boundBooks.chat[0] }}
+                    </template>
+                    <template v-else>当前会话暂未绑定世界书</template>
+                  </span>
+                </div>
+              </div>
+              <span class="bind-switch-pill" :class="{ on: isCurrentBookChat }">
+                <span class="bind-switch-knob"></span>
+              </span>
+            </button>
+
+            <!-- 4. 绑定为全局世界书 -->
+            <button
+              class="bind-menu-item"
+              :class="{ active: isCurrentBookGlobal, disabled: isBindingBusy }"
+              :disabled="isBindingBusy"
+              @click="handleToggleBind('global')"
+            >
+              <div class="bind-item-lead">
+                <i class="fa-solid fa-earth-americas bind-item-icon"></i>
+                <div class="bind-item-info">
+                  <span class="bind-item-title">绑定为全局世界书</span>
+                  <span class="bind-item-sub">
+                    <template v-if="isCurrentBookGlobal">已在全局世界书中启用</template>
+                    <template v-else>当前全局已启用 {{ lorebookState.boundBooks.global.length }} 本</template>
+                  </span>
+                </div>
+              </div>
+              <span class="bind-switch-pill" :class="{ on: isCurrentBookGlobal }">
+                <span class="bind-switch-knob"></span>
+              </span>
+            </button>
+          </div>
+        </div>
+
         <!-- 批量整理条目模式开关 -->
         <button
           v-if="lorebookState.currentBook"
@@ -496,6 +776,15 @@ function handleExecuteBatchGroup() {
             >
               <i class="fa-solid fa-folder-plus"></i>
               <span>新建世界书</span>
+            </button>
+
+            <button
+              v-if="lorebookState.currentBook"
+              class="book-tools-menu-item"
+              @click="toggleBindMenu()"
+            >
+              <i class="fa-solid fa-link"></i>
+              <span>世界书绑定设置</span>
             </button>
 
             <button
@@ -788,16 +1077,39 @@ function handleExecuteBatchGroup() {
 
         <div v-else class="groups-flow">
           <div
-            v-for="grp in entryGroups"
+            v-for="(grp, gIdx) in entryGroups"
             :key="grp.name"
+            :data-group-name="grp.name"
             class="group-section-card"
+            :class="{
+              'group-dragging': draggedGroupName === grp.name,
+              'group-drop-before': isGroupDropTarget(grp.name, 'before'),
+              'group-drop-after': isGroupDropTarget(grp.name, 'after'),
+            }"
           >
-            <!-- 组行卡片 (折叠箭头、分组名、启用计数、组总开关) -->
+            <!-- 组行卡片 (拖拽手柄、折叠箭头、分组名、上下排序、启用计数、组总开关) -->
             <div
               class="group-header-row"
+              draggable="true"
+              @dragstart="onGroupDragStart($event, grp.name)"
+              @dragover="onGroupDragOver($event, grp.name)"
+              @drop.stop="onGroupDrop($event, grp.name)"
+              @dragend="onGroupDragEnd"
               @click="toggleGroupFold(grp.name)"
             >
               <div class="group-lead-info">
+                <span
+                  v-if="entryGroups.length > 1"
+                  class="group-drag-handle"
+                  title="长按或拖拽调整分组顺序"
+                  @click.stop
+                  @touchstart.stop="onGroupTouchStart($event, grp.name)"
+                  @touchmove.stop="onGroupTouchMove($event)"
+                  @touchend.stop="onGroupTouchEnd"
+                  @touchcancel.stop="onGroupTouchEnd"
+                >
+                  <i class="fa-solid fa-grip-vertical"></i>
+                </span>
                 <i
                   class="fa-solid fa-chevron-right group-chevron"
                   :class="{ expanded: lorebookState.expandedGroups[grp.name] }"
@@ -806,6 +1118,26 @@ function handleExecuteBatchGroup() {
               </div>
 
               <div class="group-actions-right">
+                <!-- 分组上下移动排序按钮 -->
+                <div v-if="entryGroups.length > 1" class="group-sort-btns" @click.stop>
+                  <button
+                    class="group-move-btn"
+                    :disabled="gIdx === 0"
+                    @click.stop="moveGroupOrder(grp.name, -1)"
+                    title="上移分组"
+                  >
+                    <i class="fa-solid fa-angle-up"></i>
+                  </button>
+                  <button
+                    class="group-move-btn"
+                    :disabled="gIdx === entryGroups.length - 1"
+                    @click.stop="moveGroupOrder(grp.name, 1)"
+                    title="下移分组"
+                  >
+                    <i class="fa-solid fa-angle-down"></i>
+                  </button>
+                </div>
+
                 <!-- 启用数 / 总数计数 -->
                 <span class="group-count-pill" :class="{ 'count-active': grp.enabledCount > 0 }">
                   {{ grp.enabledCount }}/{{ grp.totalCount }}
@@ -3772,5 +4104,240 @@ function handleExecuteBatchGroup() {
   font-weight: 600;
   cursor: pointer;
   margin-top: 4px;
+}
+
+/* ================= 世界书绑定下拉菜单 ================= */
+.book-bind-dropdown-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.book-bind-btn {
+  position: relative;
+}
+
+.bind-count-dot {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--myext-accent);
+  color: var(--myext-accent-ink);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 14px;
+  text-align: center;
+  font-family: var(--myext-font-mono);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+
+.book-bind-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  width: 280px;
+  max-width: calc(100vw - 24px);
+  background: var(--myext-surface);
+  border: 1px solid var(--myext-line-strong);
+  border-radius: var(--myext-radius);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+  padding: 6px;
+  z-index: 120;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.bind-menu-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--myext-ink-muted);
+  border-bottom: 1px solid var(--myext-line);
+  margin-bottom: 2px;
+}
+
+.bind-menu-bookname {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--myext-ink);
+}
+
+.bind-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--myext-radius-sm);
+  background: transparent;
+  color: var(--myext-ink);
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.bind-menu-item:hover:not(:disabled) {
+  background: var(--myext-surface-2);
+}
+
+.bind-menu-item.active {
+  background: rgba(110, 150, 129, 0.1);
+  border-color: rgba(110, 150, 129, 0.25);
+}
+
+.bind-menu-item.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.bind-item-lead {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  flex: 1;
+}
+
+.bind-item-icon {
+  font-size: 13px;
+  width: 16px;
+  text-align: center;
+  color: var(--myext-ink-soft);
+  flex-shrink: 0;
+}
+
+.bind-menu-item.active .bind-item-icon {
+  color: var(--myext-accent);
+}
+
+.bind-item-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.bind-item-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--myext-ink);
+  line-height: 1.2;
+}
+
+.bind-item-sub {
+  font-size: 10px;
+  color: var(--myext-ink-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.2;
+}
+
+.bind-switch-pill {
+  width: 32px;
+  height: 18px;
+  border-radius: 9px;
+  background: var(--myext-line-strong);
+  position: relative;
+  transition: background 0.2s ease;
+  padding: 2px;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.bind-switch-pill.on {
+  background: var(--myext-accent);
+}
+
+.bind-switch-knob {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #ffffff;
+  transition: transform 0.2s ease;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+
+.bind-switch-pill.on .bind-switch-knob {
+  transform: translateX(14px);
+}
+
+/* ================= 分组拖拽与排序样式 ================= */
+.group-drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 22px;
+  color: var(--myext-ink-muted);
+  cursor: grab;
+  opacity: 0.65;
+  flex-shrink: 0;
+  touch-action: none;
+}
+
+.group-drag-handle:hover,
+.group-drag-handle:active {
+  color: var(--myext-accent);
+  opacity: 1;
+}
+
+.group-sort-btns {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.group-move-btn {
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--myext-line);
+  border-radius: 4px;
+  background: var(--myext-surface-2);
+  color: var(--myext-ink-soft);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.group-move-btn:hover:not(:disabled) {
+  color: var(--myext-accent);
+  border-color: var(--myext-accent);
+}
+
+.group-move-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.group-section-card.group-dragging {
+  opacity: 0.55;
+  border-style: dashed;
+  border-color: var(--myext-accent);
+}
+
+.group-section-card.group-drop-before {
+  box-shadow: 0 -2px 0 0 var(--myext-accent);
+}
+
+.group-section-card.group-drop-after {
+  box-shadow: 0 2px 0 0 var(--myext-accent);
 }
 </style>

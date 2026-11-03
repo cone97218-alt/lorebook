@@ -61,7 +61,15 @@ const existingGroups = computed(() => {
     const grp = (e.display_group || (e as any).extensions?.display_group || '').trim();
     if (grp) set.add(grp);
   }
-  return Array.from(set).sort();
+  const orderList = lorebookState.groupOrder;
+  return Array.from(set).sort((a, b) => {
+    const idxA = orderList.indexOf(a);
+    const idxB = orderList.indexOf(b);
+    if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+    if (idxA !== -1) return -1;
+    if (idxB !== -1) return 1;
+    return a.localeCompare(b);
+  });
 });
 
 const existingInclusionGroups = computed(() => {
