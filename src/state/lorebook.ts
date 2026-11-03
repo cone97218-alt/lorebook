@@ -1150,12 +1150,16 @@ export async function saveImmediately(showIndicator = true): Promise<boolean> {
  * 新建一本世界书
  */
 export async function createBook(name: string): Promise<boolean> {
-  const ok = await createNewWorldBook(name);
+  const cleanName = name.trim();
+  if (!cleanName) return false;
+  const ok = await createNewWorldBook(cleanName);
   if (ok) {
-    toast(`已成功创建世界书《${name}》`, 'success');
-    await syncHostWorldInfoList();
-    await loadWorldBooks(true);
-    await selectWorldBook(name, false, true);
+    toast(`已成功创建世界书《${cleanName}》`, 'success');
+    if (!lorebookState.books.includes(cleanName)) {
+      lorebookState.books = [...lorebookState.books, cleanName].sort((a, b) => a.localeCompare(b));
+    }
+    await selectWorldBook(cleanName, false, false);
+    void syncHostWorldInfoList();
   } else {
     toast('创建世界书失败，可能名称重名或非法', 'warning');
   }
@@ -1171,6 +1175,7 @@ export async function deleteCurrentBook(): Promise<boolean> {
   const ok = await deleteWorldBook(name, true);
   if (ok) {
     toast(`世界书《${name}》已删除`, 'info');
+    lorebookState.books = lorebookState.books.filter(b => b !== name);
     for (const key of Object.keys(lorebookState.scopeBooks) as BookScopeFilter[]) {
       if (lorebookState.scopeBooks[key] === name) {
         lorebookState.scopeBooks[key] = '';
@@ -1188,8 +1193,7 @@ export async function deleteCurrentBook(): Promise<boolean> {
     lorebookState.bookData = null;
     lorebookState.activeUid = null;
     lorebookState.groupOrder = [];
-    await syncHostWorldInfoList();
-    await loadWorldBooks(true);
+    await loadWorldBooks(false);
   } else {
     toast('删除失败', 'warning');
   }
@@ -1208,6 +1212,10 @@ export async function renameCurrentBook(newName: string): Promise<boolean> {
   const ok = await renameWorldBook(oldName, cleanNew, lorebookState.bookData);
   if (ok) {
     toast(`已成功重命名为《${cleanNew}》`, 'success');
+    lorebookState.books = lorebookState.books
+      .filter(b => b !== oldName && b !== cleanNew)
+      .concat(cleanNew)
+      .sort((a, b) => a.localeCompare(b));
     for (const key of Object.keys(lorebookState.scopeBooks) as BookScopeFilter[]) {
       if (lorebookState.scopeBooks[key] === oldName) {
         lorebookState.scopeBooks[key] = cleanNew;
@@ -1227,9 +1235,7 @@ export async function renameCurrentBook(newName: string): Promise<boolean> {
     try {
       localStorage.removeItem(getGroupOrderStorageKey(oldName));
     } catch {}
-    await syncHostWorldInfoList();
-    await loadWorldBooks(true);
-    await selectWorldBook(cleanNew);
+    await selectWorldBook(cleanNew, true, false);
   } else {
     toast('重命名失败，可能名称重名或非法', 'warning');
   }
@@ -1722,23 +1728,30 @@ export async function batchDeleteBooks(names: string[]): Promise<boolean> {
   const res = await batchDeleteWorldBooks(names);
   if (res.success > 0) {
     toast(`成功删除 ${res.success} 本世界书`, 'success');
+    const deletedSet = new Set(res.deletedNames.length ? res.deletedNames : names);
+    lorebookState.books = lorebookState.books.filter(b => !deletedSet.has(b));
     for (const key of Object.keys(lorebookState.scopeBooks) as BookScopeFilter[]) {
-      if (names.includes(lorebookState.scopeBooks[key])) {
+      if (deletedSet.has(lorebookState.scopeBooks[key])) {
         lorebookState.scopeBooks[key] = '';
       }
     }
     saveScopeBooks(lorebookState.scopeBooks);
     const sortMap = loadBookSortOrders();
-    for (const n of names) {
+    for (const n of deletedSet) {
       delete sortMap[n];
+      try {
+        localStorage.removeItem(getGroupStorageKey(n));
+        localStorage.removeItem(getGroupOrderStorageKey(n));
+      } catch {}
     }
     saveBookSortOrders(sortMap);
-    if (names.includes(lorebookState.currentBook)) {
+    if (deletedSet.has(lorebookState.currentBook)) {
       lorebookState.currentBook = '';
       lorebookState.bookData = null;
+      lorebookState.activeUid = null;
+      lorebookState.groupOrder = [];
     }
-    await syncHostWorldInfoList();
-    await loadWorldBooks(true);
+    await loadWorldBooks(false);
     return true;
   } else {
     toast('删除失败', 'warning');
@@ -1747,44 +1760,59 @@ export async function batchDeleteBooks(names: string[]): Promise<boolean> {
 }
 
 /**
- * 批量导入多本世界书 JSON
+ * 批量导入多本世界书 JSON（并发读取与写入，秒级完成导入）
  */
 export async function batchImportBooks(files: FileList | File[]): Promise<{ success: number; failed: number; names: string[] }> {
   let success = 0;
   let failed = 0;
   const importedNames: string[] = [];
+  const fileArray = Array.from(files);
+  const CONCURRENCY = 6;
 
-  for (let i = 0; i < files.length; i++) {
-    const file = files[i];
-    const bookName = file.name.replace(/\.json$/i, '').trim();
-    if (!bookName) {
-      failed++;
-      continue;
-    }
+  for (let i = 0; i < fileArray.length; i += CONCURRENCY) {
+    const chunk = fileArray.slice(i, i + CONCURRENCY);
+    const results = await Promise.all(
+      chunk.map(async file => {
+        const bookName = file.name.replace(/\.json$/i, '').trim();
+        if (!bookName) {
+          return { bookName: '', ok: false };
+        }
+        try {
+          const text = await file.text();
+          const ok = await importWorldBookFromJson(bookName, text, { skipHostNotify: true });
+          return { bookName, ok };
+        } catch (err) {
+          console.error(`[Lorebook] Failed to import ${file.name}:`, err);
+          return { bookName, ok: false };
+        }
+      }),
+    );
 
-    try {
-      const text = await file.text();
-      const ok = await importWorldBookFromJson(bookName, text);
-      if (ok) {
+    for (const r of results) {
+      if (r.ok && r.bookName) {
         success++;
-        importedNames.push(bookName);
+        importedNames.push(r.bookName);
       } else {
         failed++;
       }
-    } catch (err) {
-      console.error(`[Lorebook] Failed to import ${file.name}:`, err);
-      failed++;
     }
   }
 
   if (success > 0) {
-    await syncHostWorldInfoList();
-    await loadWorldBooks(true);
+    const mergedSet = new Set([...lorebookState.books, ...importedNames]);
+    lorebookState.books = Array.from(mergedSet).sort((a, b) => a.localeCompare(b));
 
-    // 若当前未选世界书，自动定位到首本导入的书
+    await loadWorldBooks(false);
+
+    // 若当前未选世界书，或刚刚导入的书包含当前书，立即从内存缓存秒开
     if (!lorebookState.currentBook && importedNames[0]) {
-      await selectWorldBook(importedNames[0]);
+      await selectWorldBook(importedNames[0], false, false);
+    } else if (lorebookState.currentBook && importedNames.includes(lorebookState.currentBook)) {
+      await selectWorldBook(lorebookState.currentBook, true, false);
     }
+
+    // 后台统一同步一次酒馆原生世界书列表与事件，不阻塞界面
+    void syncHostWorldInfoList();
 
     if (failed === 0) {
       toast(`成功导入 ${success} 本世界书`, 'success');
@@ -1845,9 +1873,20 @@ export function batchImportJson(jsonStr: string): boolean {
       entriesToImport.push(...data as WorldInfoEntry[]);
     }
 
+    const existingUids = new Set(
+      Object.keys(lorebookState.bookData.entries)
+        .map(k => Number(k))
+        .filter(n => !Number.isNaN(n)),
+    );
+    let nextUid = 0;
+
     for (const raw of entriesToImport) {
       if (raw && typeof raw === 'object') {
-        const newUid = getFreeUid(lorebookState.bookData);
+        while (existingUids.has(nextUid)) {
+          nextUid++;
+        }
+        const newUid = nextUid;
+        existingUids.add(newUid);
         const template = createEntryTemplate(newUid);
         const entry: WorldInfoEntry = {
           ...template,
@@ -1861,6 +1900,7 @@ export function batchImportJson(jsonStr: string): boolean {
 
     if (count > 0) {
       markDirty();
+      void saveImmediately();
       toast(`已成功导入 ${count} 个条目`, 'success');
       return true;
     }

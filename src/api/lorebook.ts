@@ -264,7 +264,11 @@ export let lastInternalSaveTime = 0;
  * 3. 轻量刷新原生编辑器抽屉（若其正在打开）
  * 4. 触发 WORLDINFO_UPDATED 事件通知酒馆外部其他组件
  */
-export async function saveWorldBookData(name: string, data: WorldInfoData): Promise<boolean> {
+export async function saveWorldBookData(
+  name: string,
+  data: WorldInfoData,
+  options?: { skipHostNotify?: boolean },
+): Promise<boolean> {
   if (!name || !data) return false;
   lastInternalSaveTime = Date.now();
   try {
@@ -288,36 +292,42 @@ export async function saveWorldBookData(name: string, data: WorldInfoData): Prom
       return false;
     }
 
-    // 2. 存盘成功后，立即将纯净克隆写入宿主原生内存缓存（worldInfoCache）
+    // 2. 存盘成功后，立即将纯净对象写入宿主原生内存缓存（worldInfoCache）与 world_names
     if (hostWI?.worldInfoCache?.set) {
       try {
-        hostWI.worldInfoCache.set(name, structuredClone(cleanData));
+        hostWI.worldInfoCache.set(name, cleanData);
       } catch {
         /* ignore */
       }
     }
-
-    // 3. 实时轻量通知酒馆原生世界书编辑器（若当前正在打开）
-    try {
-      if (typeof ctx?.reloadWorldInfoEditor === 'function') {
-        ctx.reloadWorldInfoEditor(name);
-      } else if (typeof hostWI?.reloadEditor === 'function') {
-        hostWI.reloadEditor(name, false);
-      }
-    } catch {
-      /* ignore */
+    if (Array.isArray(hostWI?.world_names) && !hostWI.world_names.includes(name)) {
+      hostWI.world_names.push(name);
+      hostWI.world_names.sort((a: string, b: string) => a.localeCompare(b));
     }
 
-    // 4. 触发 ST 宿主事件，通知外部环境世界书已更新
-    try {
-      const eventEmitter = hostWI?.eventSource ?? ctx?.eventSource;
-      const eventTypes = hostWI?.event_types ?? ctx?.eventTypes;
-      const eventName = eventTypes?.WORLDINFO_UPDATED || 'worldinfo_updated';
-      if (eventEmitter?.emit) {
-        await eventEmitter.emit(eventName, name, cleanData);
+    if (!options?.skipHostNotify) {
+      // 3. 实时轻量通知酒馆原生世界书编辑器（若当前正在打开）
+      try {
+        if (typeof ctx?.reloadWorldInfoEditor === 'function') {
+          ctx.reloadWorldInfoEditor(name);
+        } else if (typeof hostWI?.reloadEditor === 'function') {
+          hostWI.reloadEditor(name, false);
+        }
+      } catch {
+        /* ignore */
       }
-    } catch (err) {
-      console.warn('[Lorebook] Non-fatal error emitting WORLDINFO_UPDATED:', err);
+
+      // 4. 触发 ST 宿主事件，通知外部环境世界书已更新
+      try {
+        const eventEmitter = hostWI?.eventSource ?? ctx?.eventSource;
+        const eventTypes = hostWI?.event_types ?? ctx?.eventTypes;
+        const eventName = eventTypes?.WORLDINFO_UPDATED || 'worldinfo_updated';
+        if (eventEmitter?.emit) {
+          void eventEmitter.emit(eventName, name, cleanData);
+        }
+      } catch (err) {
+        console.warn('[Lorebook] Non-fatal error emitting WORLDINFO_UPDATED:', err);
+      }
     }
 
     return true;
@@ -340,19 +350,26 @@ export async function createNewWorldBook(name: string): Promise<boolean> {
 }
 
 /**
- * 强制同步宿主世界书列表，确保宿主内存、DOM 及事件与磁盘完全对齐
+ * 强制同步宿主世界书列表，确保宿主内存、DOM 及事件与磁盘完全对齐（单次请求避免重复拉取）
  */
 export async function syncHostWorldInfoList(): Promise<string[]> {
   const hostWI = await getHostWorldInfo();
+  let list: string[] = [];
+
   if (typeof hostWI?.updateWorldInfoList === 'function') {
     try {
       await hostWI.updateWorldInfoList();
+      if (Array.isArray(hostWI.world_names)) {
+        list = [...hostWI.world_names];
+      }
     } catch (err) {
       console.warn('[Lorebook] hostWI.updateWorldInfoList failed:', err);
     }
   }
 
-  const list = await fetchWorldBookList(true);
+  if (list.length === 0) {
+    list = await fetchWorldBookList(false);
+  }
 
   // 触发宿主世界书设置更新通知
   try {
@@ -371,7 +388,8 @@ export async function syncHostWorldInfoList(): Promise<string[]> {
 }
 
 /**
- * 删除世界书并热更新 SillyTavern 原生界面与缓存
+ * 删除世界书并快速清理内存与原生状态
+ * 直接请求 /api/worldinfo/delete 并做内存清理，避免调用原生 deleteWorldInfo 导致每删一本书都触发全量 settings 拉取和原生编辑器重绘
  */
 export async function deleteWorldBook(name: string, syncHost = true): Promise<boolean> {
   if (!name) return false;
@@ -379,32 +397,15 @@ export async function deleteWorldBook(name: string, syncHost = true): Promise<bo
     const ctx = getContext();
     const hostWI = await getHostWorldInfo();
 
-    let deleted = false;
+    // 1. 直接调用后端删除接口（最快、无多余副作用）
+    const res = await fetch('/api/worldinfo/delete', {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify({ name }),
+    });
+    if (!res.ok) return false;
 
-    // 1. 优先调用宿主原生的 deleteWorldInfo(name)
-    // 原生函数内部会：调用 /api/worldinfo/delete、清理 worldInfoCache、清理 selected_world_info、更新 updateWorldInfoList()、清理 #character_world 与 persona lorebook
-    if (typeof hostWI?.deleteWorldInfo === 'function') {
-      try {
-        if (Array.isArray(hostWI.world_names) && hostWI.world_names.includes(name)) {
-          deleted = await hostWI.deleteWorldInfo(name);
-        }
-      } catch (err) {
-        console.warn('[Lorebook] hostWI.deleteWorldInfo failed, falling back', err);
-      }
-    }
-
-    // 2. 如果原生未删除（例如未就绪或未在 world_names 中匹配到），通过 API 删除并手工做原生清理
-    if (!deleted) {
-      const res = await fetch('/api/worldinfo/delete', {
-        method: 'POST',
-        headers: getHeaders(),
-        body: JSON.stringify({ name }),
-      });
-      if (!res.ok) return false;
-      deleted = true;
-    }
-
-    // 3. 内存与缓存强力清理 (确保原生与插件自有缓存不再留存)
+    // 2. 内存与缓存即时清理
     invalidateWorldBookCache(name);
     if (hostWI?.worldInfoCache?.delete) {
       try {
@@ -414,7 +415,14 @@ export async function deleteWorldBook(name: string, syncHost = true): Promise<bo
       }
     }
 
-    // 从全局已选原生列表中移除
+    if (Array.isArray(hostWI?.world_names)) {
+      const wIdx = hostWI.world_names.indexOf(name);
+      if (wIdx !== -1) {
+        hostWI.world_names.splice(wIdx, 1);
+      }
+    }
+
+    // 3. 从全局已选原生列表中移除
     if (Array.isArray(hostWI?.selected_world_info)) {
       const idx = hostWI.selected_world_info.indexOf(name);
       if (idx !== -1) {
@@ -427,48 +435,22 @@ export async function deleteWorldBook(name: string, syncHost = true): Promise<bo
       }
     }
 
-    // 4. 同步更新宿主原生世界书列表与选单（批量模式时可跳过单次更新，待整体完成后统一同步）
+    // 4. 轻量移除原生 DOM 中的对应 <option>（不触发重型原生编辑器重绘）
+    try {
+      document
+        .querySelectorAll<HTMLOptionElement>('#world_info option, #world_editor_select option, #character_world option')
+        .forEach(el => {
+          if ((el.textContent || '').trim() === name || el.value === name) {
+            el.remove();
+          }
+        });
+    } catch {
+      /* ignore */
+    }
+
+    // 5. 异步通知宿主同步列表（不阻塞当前 UI 响应）
     if (syncHost) {
-      if (typeof hostWI?.updateWorldInfoList === 'function') {
-        try {
-          await hostWI.updateWorldInfoList();
-        } catch {
-          /* ignore */
-        }
-      } else if (typeof ctx?.updateWorldInfoList === 'function') {
-        try {
-          await ctx.updateWorldInfoList();
-        } catch {
-          /* ignore */
-        }
-      }
-
-      // 5. 原生 DOM 彻底清理与选中状态重置
-      try {
-        document.querySelectorAll<HTMLOptionElement>('#world_info option, #world_editor_select option, #character_world option')
-          .forEach((el) => {
-            if (el.textContent === name || el.value === name) {
-              el.remove();
-            }
-          });
-
-        // 如果原生编辑器刚才正在看这本被删除的书，重置原生编辑器为未选中并隐藏
-        const editorSelect = $('#world_editor_select');
-        const currentNativeSelected = String(editorSelect.find('option:selected').text());
-        if (currentNativeSelected === name || !currentNativeSelected) {
-          editorSelect.val('').trigger('change');
-        }
-      } catch {
-        /* ignore */
-      }
-
-      // 6. 触发原生设置更新事件
-      const eventEmitter = hostWI?.eventSource ?? ctx?.eventSource;
-      const eventTypes = hostWI?.event_types ?? ctx?.eventTypes;
-      if (eventEmitter?.emit) {
-        const eventName = eventTypes?.WORLDINFO_SETTINGS_UPDATED || 'worldinfo_settings_updated';
-        void eventEmitter.emit(eventName);
-      }
+      void syncHostWorldInfoList();
     }
 
     return true;
@@ -479,20 +461,36 @@ export async function deleteWorldBook(name: string, syncHost = true): Promise<bo
 }
 
 /**
- * 批量删除多本世界书
+ * 批量删除多本世界书（并发请求后端，整体完成后后台统一同步一次宿主列表）
  */
-export async function batchDeleteWorldBooks(names: string[]): Promise<{ success: number; failed: number }> {
+export async function batchDeleteWorldBooks(names: string[]): Promise<{ success: number; failed: number; deletedNames: string[] }> {
   let success = 0;
   let failed = 0;
-  for (const name of names) {
-    const ok = await deleteWorldBook(name, false);
-    if (ok) success++;
-    else failed++;
+  const deletedNames: string[] = [];
+  const CONCURRENCY = 8;
+
+  for (let i = 0; i < names.length; i += CONCURRENCY) {
+    const chunk = names.slice(i, i + CONCURRENCY);
+    const results = await Promise.all(
+      chunk.map(async name => {
+        const ok = await deleteWorldBook(name, false);
+        return { name, ok };
+      }),
+    );
+    for (const r of results) {
+      if (r.ok) {
+        success++;
+        deletedNames.push(r.name);
+      } else {
+        failed++;
+      }
+    }
   }
+
   if (success > 0) {
-    await syncHostWorldInfoList();
+    void syncHostWorldInfoList();
   }
-  return { success, failed };
+  return { success, failed, deletedNames };
 }
 
 /**
@@ -632,7 +630,11 @@ export function normalizeWorldBookData(raw: any, hostWI?: any): WorldInfoData | 
 /**
  * 从 JSON 对象或文本中解析世界书数据并保存
  */
-export async function importWorldBookFromJson(name: string, content: string | object): Promise<boolean> {
+export async function importWorldBookFromJson(
+  name: string,
+  content: string | object,
+  options?: { skipHostNotify?: boolean },
+): Promise<boolean> {
   const cleanName = name.trim();
   if (!cleanName) return false;
 
@@ -655,7 +657,7 @@ export async function importWorldBookFromJson(name: string, content: string | ob
     return false;
   }
 
-  return saveWorldBookData(cleanName, normalizedData);
+  return saveWorldBookData(cleanName, normalizedData, options);
 }
 
 /**
@@ -673,15 +675,8 @@ export async function renameWorldBook(oldName: string, newName: string, data: Wo
   // 2. 删除旧名称
   await deleteWorldBook(cleanOld, false);
 
-  // 3. 强制同步宿主世界书列表
-  await syncHostWorldInfoList();
-
-  // 4. 触发宿主更新通知
-  const ctx = getContext();
-  if (ctx?.eventSource?.emit) {
-    const eventName = ctx.eventTypes?.WORLDINFO_UPDATED || 'worldinfo_updated';
-    void ctx.eventSource.emit(eventName, cleanNew, data);
-  }
+  // 3. 后台同步宿主世界书列表
+  void syncHostWorldInfoList();
 
   return true;
 }

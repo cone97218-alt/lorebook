@@ -262,6 +262,8 @@ async function handleExecuteBatchImport() {
 }
 
 function setBookScope(scope: BookScopeFilter) {
+  showBindMenu.value = false;
+  showBookToolsMenu.value = false;
   void switchBookScope(scope);
 }
 
@@ -600,135 +602,135 @@ function onGroupTouchEnd() {
           </select>
         </div>
 
-        <!-- 当前世界书绑定菜单 (角色卡主书 / 附加世界书 / 当前聊天 / 全局) -->
-        <div v-if="lorebookState.currentBook" class="book-bind-dropdown-wrapper">
-          <button
-            class="icon-btn book-bind-btn"
-            :class="{ active: showBindMenu || currentBookBindCount > 0 }"
-            @click="toggleBindMenu"
-            title="绑定当前世界书 (角色卡 / 附加 / 聊天 / 全局)"
-          >
+        <!-- 当前世界书绑定按钮 (仅在「全部」世界书标签页常驻顶栏；其余标签页收纳在 ... 更多菜单中) -->
+        <button
+          v-if="lorebookState.currentBook && lorebookState.bookScope === 'all'"
+          class="icon-btn book-bind-btn"
+          :class="{ active: showBindMenu || currentBookBindCount > 0 }"
+          @click="toggleBindMenu"
+          title="绑定当前世界书 (角色卡 / 附加 / 聊天 / 全局)"
+        >
+          <i class="fa-solid fa-link"></i>
+          <span v-if="currentBookBindCount > 0" class="bind-count-dot">{{ currentBookBindCount }}</span>
+        </button>
+
+        <!-- 世界书绑定下拉面板 (挂载于选择行容器内，自适应窄屏绝不溢出) -->
+        <div
+          v-if="showBindMenu && lorebookState.currentBook"
+          class="book-tools-menu-backdrop"
+          @click="showBindMenu = false"
+        ></div>
+
+        <div v-if="showBindMenu && lorebookState.currentBook" class="book-bind-menu">
+          <div class="bind-menu-header">
             <i class="fa-solid fa-link"></i>
-            <span v-if="currentBookBindCount > 0" class="bind-count-dot">{{ currentBookBindCount }}</span>
+            <span class="bind-menu-bookname">{{ lorebookState.currentBook }}</span>
+          </div>
+
+          <!-- 1. 绑定为角色卡主世界书 -->
+          <button
+            class="bind-menu-item"
+            :class="{ active: isCurrentBookCharPrimary, disabled: !lorebookState.boundBooks.hasCharacter || isBindingBusy }"
+            :disabled="!lorebookState.boundBooks.hasCharacter || isBindingBusy"
+            @click="handleToggleBind('charPrimary')"
+          >
+            <div class="bind-item-lead">
+              <i class="fa-solid fa-user-astronaut bind-item-icon"></i>
+              <div class="bind-item-info">
+                <span class="bind-item-title">绑定到角色卡 (主世界书)</span>
+                <span class="bind-item-sub">
+                  <template v-if="!lorebookState.boundBooks.hasCharacter">未选择角色卡</template>
+                  <template v-else-if="isCurrentBookCharPrimary">
+                    已绑定角色「{{ lorebookState.boundBooks.characterName || '当前角色' }}」
+                  </template>
+                  <template v-else-if="lorebookState.boundBooks.characterPrimary">
+                    当前主书: {{ lorebookState.boundBooks.characterPrimary }}
+                  </template>
+                  <template v-else>
+                    角色「{{ lorebookState.boundBooks.characterName || '当前角色' }}」暂未绑定主书
+                  </template>
+                </span>
+              </div>
+            </div>
+            <span class="bind-switch-pill" :class="{ on: isCurrentBookCharPrimary }">
+              <span class="bind-switch-knob"></span>
+            </span>
           </button>
 
-          <div
-            v-if="showBindMenu"
-            class="book-tools-menu-backdrop"
-            @click="showBindMenu = false"
-          ></div>
-
-          <div v-if="showBindMenu" class="book-bind-menu">
-            <div class="bind-menu-header">
-              <i class="fa-solid fa-link"></i>
-              <span class="bind-menu-bookname">{{ lorebookState.currentBook }}</span>
+          <!-- 2. 绑定为角色卡附加世界书 -->
+          <button
+            class="bind-menu-item"
+            :class="{ active: isCurrentBookCharAux, disabled: !lorebookState.boundBooks.hasCharacter || isBindingBusy }"
+            :disabled="!lorebookState.boundBooks.hasCharacter || isBindingBusy"
+            @click="handleToggleBind('charAux')"
+          >
+            <div class="bind-item-lead">
+              <i class="fa-solid fa-book-medical bind-item-icon"></i>
+              <div class="bind-item-info">
+                <span class="bind-item-title">绑定为附加世界书</span>
+                <span class="bind-item-sub">
+                  <template v-if="!lorebookState.boundBooks.hasCharacter">未选择角色卡</template>
+                  <template v-else-if="isCurrentBookCharAux">
+                    已作为「{{ lorebookState.boundBooks.characterName || '当前角色' }}」的附加世界书
+                  </template>
+                  <template v-else>
+                    当前附加书 ({{ lorebookState.boundBooks.characterAux.length }} 本)
+                  </template>
+                </span>
+              </div>
             </div>
+            <span class="bind-switch-pill" :class="{ on: isCurrentBookCharAux }">
+              <span class="bind-switch-knob"></span>
+            </span>
+          </button>
 
-            <!-- 1. 绑定为角色卡主世界书 -->
-            <button
-              class="bind-menu-item"
-              :class="{ active: isCurrentBookCharPrimary, disabled: !lorebookState.boundBooks.hasCharacter || isBindingBusy }"
-              :disabled="!lorebookState.boundBooks.hasCharacter || isBindingBusy"
-              @click="handleToggleBind('charPrimary')"
-            >
-              <div class="bind-item-lead">
-                <i class="fa-solid fa-user-astronaut bind-item-icon"></i>
-                <div class="bind-item-info">
-                  <span class="bind-item-title">绑定到角色卡 (主世界书)</span>
-                  <span class="bind-item-sub">
-                    <template v-if="!lorebookState.boundBooks.hasCharacter">未选择角色卡</template>
-                    <template v-else-if="isCurrentBookCharPrimary">
-                      已绑定角色「{{ lorebookState.boundBooks.characterName || '当前角色' }}」
-                    </template>
-                    <template v-else-if="lorebookState.boundBooks.characterPrimary">
-                      当前主书: {{ lorebookState.boundBooks.characterPrimary }}
-                    </template>
-                    <template v-else>
-                      角色「{{ lorebookState.boundBooks.characterName || '当前角色' }}」暂未绑定主书
-                    </template>
-                  </span>
-                </div>
+          <!-- 3. 绑定到当前聊天 -->
+          <button
+            class="bind-menu-item"
+            :class="{ active: isCurrentBookChat, disabled: !lorebookState.boundBooks.hasChat || isBindingBusy }"
+            :disabled="!lorebookState.boundBooks.hasChat || isBindingBusy"
+            @click="handleToggleBind('chat')"
+          >
+            <div class="bind-item-lead">
+              <i class="fa-solid fa-comments bind-item-icon"></i>
+              <div class="bind-item-info">
+                <span class="bind-item-title">绑定到当前聊天</span>
+                <span class="bind-item-sub">
+                  <template v-if="!lorebookState.boundBooks.hasChat">当前无活跃聊天会话</template>
+                  <template v-else-if="isCurrentBookChat">已绑定至当前聊天会话</template>
+                  <template v-else-if="lorebookState.boundBooks.chat.length">
+                    当前会话已绑: {{ lorebookState.boundBooks.chat[0] }}
+                  </template>
+                  <template v-else>当前会话暂未绑定世界书</template>
+                </span>
               </div>
-              <span class="bind-switch-pill" :class="{ on: isCurrentBookCharPrimary }">
-                <span class="bind-switch-knob"></span>
-              </span>
-            </button>
+            </div>
+            <span class="bind-switch-pill" :class="{ on: isCurrentBookChat }">
+              <span class="bind-switch-knob"></span>
+            </span>
+          </button>
 
-            <!-- 2. 绑定为角色卡附加世界书 -->
-            <button
-              class="bind-menu-item"
-              :class="{ active: isCurrentBookCharAux, disabled: !lorebookState.boundBooks.hasCharacter || isBindingBusy }"
-              :disabled="!lorebookState.boundBooks.hasCharacter || isBindingBusy"
-              @click="handleToggleBind('charAux')"
-            >
-              <div class="bind-item-lead">
-                <i class="fa-solid fa-book-medical bind-item-icon"></i>
-                <div class="bind-item-info">
-                  <span class="bind-item-title">绑定为附加世界书</span>
-                  <span class="bind-item-sub">
-                    <template v-if="!lorebookState.boundBooks.hasCharacter">未选择角色卡</template>
-                    <template v-else-if="isCurrentBookCharAux">
-                      已作为「{{ lorebookState.boundBooks.characterName || '当前角色' }}」的附加世界书
-                    </template>
-                    <template v-else>
-                      当前附加书 ({{ lorebookState.boundBooks.characterAux.length }} 本)
-                    </template>
-                  </span>
-                </div>
+          <!-- 4. 绑定为全局世界书 -->
+          <button
+            class="bind-menu-item"
+            :class="{ active: isCurrentBookGlobal, disabled: isBindingBusy }"
+            :disabled="isBindingBusy"
+            @click="handleToggleBind('global')"
+          >
+            <div class="bind-item-lead">
+              <i class="fa-solid fa-earth-americas bind-item-icon"></i>
+              <div class="bind-item-info">
+                <span class="bind-item-title">绑定为全局世界书</span>
+                <span class="bind-item-sub">
+                  <template v-if="isCurrentBookGlobal">已在全局世界书中启用</template>
+                  <template v-else>当前全局已启用 {{ lorebookState.boundBooks.global.length }} 本</template>
+                </span>
               </div>
-              <span class="bind-switch-pill" :class="{ on: isCurrentBookCharAux }">
-                <span class="bind-switch-knob"></span>
-              </span>
-            </button>
-
-            <!-- 3. 绑定到当前聊天 -->
-            <button
-              class="bind-menu-item"
-              :class="{ active: isCurrentBookChat, disabled: !lorebookState.boundBooks.hasChat || isBindingBusy }"
-              :disabled="!lorebookState.boundBooks.hasChat || isBindingBusy"
-              @click="handleToggleBind('chat')"
-            >
-              <div class="bind-item-lead">
-                <i class="fa-solid fa-comments bind-item-icon"></i>
-                <div class="bind-item-info">
-                  <span class="bind-item-title">绑定到当前聊天</span>
-                  <span class="bind-item-sub">
-                    <template v-if="!lorebookState.boundBooks.hasChat">当前无活跃聊天会话</template>
-                    <template v-else-if="isCurrentBookChat">已绑定至当前聊天会话</template>
-                    <template v-else-if="lorebookState.boundBooks.chat.length">
-                      当前会话已绑: {{ lorebookState.boundBooks.chat[0] }}
-                    </template>
-                    <template v-else>当前会话暂未绑定世界书</template>
-                  </span>
-                </div>
-              </div>
-              <span class="bind-switch-pill" :class="{ on: isCurrentBookChat }">
-                <span class="bind-switch-knob"></span>
-              </span>
-            </button>
-
-            <!-- 4. 绑定为全局世界书 -->
-            <button
-              class="bind-menu-item"
-              :class="{ active: isCurrentBookGlobal, disabled: isBindingBusy }"
-              :disabled="isBindingBusy"
-              @click="handleToggleBind('global')"
-            >
-              <div class="bind-item-lead">
-                <i class="fa-solid fa-earth-americas bind-item-icon"></i>
-                <div class="bind-item-info">
-                  <span class="bind-item-title">绑定为全局世界书</span>
-                  <span class="bind-item-sub">
-                    <template v-if="isCurrentBookGlobal">已在全局世界书中启用</template>
-                    <template v-else>当前全局已启用 {{ lorebookState.boundBooks.global.length }} 本</template>
-                  </span>
-                </div>
-              </div>
-              <span class="bind-switch-pill" :class="{ on: isCurrentBookGlobal }">
-                <span class="bind-switch-knob"></span>
-              </span>
-            </button>
-          </div>
+            </div>
+            <span class="bind-switch-pill" :class="{ on: isCurrentBookGlobal }">
+              <span class="bind-switch-knob"></span>
+            </span>
+          </button>
         </div>
 
         <!-- 批量整理条目模式开关 -->
@@ -779,12 +781,13 @@ function onGroupTouchEnd() {
             </button>
 
             <button
-              v-if="lorebookState.currentBook"
+              v-if="lorebookState.currentBook && lorebookState.bookScope !== 'all'"
               class="book-tools-menu-item"
               @click="toggleBindMenu()"
             >
               <i class="fa-solid fa-link"></i>
               <span>世界书绑定设置</span>
+              <span v-if="currentBookBindCount > 0" class="menu-bind-badge">{{ currentBookBindCount }}</span>
             </button>
 
             <button
@@ -2173,14 +2176,22 @@ function onGroupTouchEnd() {
 
 /* 书库选择行 */
 .book-selector-row {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
+  width: 100%;
+  min-width: 0;
+}
+
+.book-selector-row > .icon-btn,
+.book-selector-row > .book-tools-dropdown-wrapper {
+  flex-shrink: 0;
 }
 
 .select-wrapper {
   position: relative;
-  flex: 1;
+  flex: 1 1 0%;
   min-width: 0;
   display: flex;
   align-items: center;
@@ -2196,9 +2207,10 @@ function onGroupTouchEnd() {
 
 .book-select {
   width: 100%;
+  min-width: 0;
   height: 36px;
   padding-left: 32px;
-  padding-right: 12px;
+  padding-right: 24px;
   border: 1px solid var(--myext-line);
   border-radius: var(--myext-radius-sm);
   background: var(--myext-surface-2);
@@ -2207,6 +2219,9 @@ function onGroupTouchEnd() {
   font-weight: 500;
   outline: none;
   cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .book-select:focus {
@@ -4107,14 +4122,23 @@ function onGroupTouchEnd() {
 }
 
 /* ================= 世界书绑定下拉菜单 ================= */
-.book-bind-dropdown-wrapper {
-  position: relative;
-  display: flex;
-  align-items: center;
-}
-
 .book-bind-btn {
   position: relative;
+}
+
+.menu-bind-badge {
+  margin-left: auto;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--myext-accent);
+  color: var(--myext-accent-ink);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+  font-family: var(--myext-font-mono);
 }
 
 .bind-count-dot {
@@ -4138,9 +4162,12 @@ function onGroupTouchEnd() {
 .book-bind-menu {
   position: absolute;
   top: calc(100% + 6px);
+  left: 0;
   right: 0;
-  width: 280px;
-  max-width: calc(100vw - 24px);
+  width: 100%;
+  max-width: 320px;
+  margin-left: auto;
+  box-sizing: border-box;
   background: var(--myext-surface);
   border: 1px solid var(--myext-line-strong);
   border-radius: var(--myext-radius);
