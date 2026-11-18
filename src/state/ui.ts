@@ -8,7 +8,11 @@ import {
   type FontFamily,
   type AutoSaveMode,
   type CustomSymbol,
+  type EditorNavMode,
+  type BatchActionId,
   DEFAULT_SYMBOLS,
+  DEFAULT_BATCH_PINNED_ACTIONS,
+  BATCH_ACTION_META,
 } from '@/api/settings';
 import { reactive, ref, watch } from 'vue';
 
@@ -20,7 +24,10 @@ export type {
   FontFamily,
   AutoSaveMode,
   CustomSymbol,
+  EditorNavMode,
+  BatchActionId,
 };
+export { DEFAULT_BATCH_PINNED_ACTIONS, BATCH_ACTION_META };
 
 export const modalHost = ref<HTMLElement | null>(null);
 
@@ -53,6 +60,8 @@ export interface UiState {
   editorShowRecursion: boolean;
   editorShowAutomation: boolean;
   editorShowInclusionGroup: boolean;
+  editorNavMode: EditorNavMode;
+  batchPinnedActions: BatchActionId[];
   showVectorized: boolean;
   replaceNativeWorldBook: boolean;
 }
@@ -96,6 +105,8 @@ export const ui = reactive<UiState>({
   editorShowRecursion: extensionSettings.editorShowRecursion,
   editorShowAutomation: extensionSettings.editorShowAutomation,
   editorShowInclusionGroup: extensionSettings.editorShowInclusionGroup,
+  editorNavMode: extensionSettings.editorNavMode,
+  batchPinnedActions: extensionSettings.batchPinnedActions,
   showVectorized: extensionSettings.showVectorized,
   replaceNativeWorldBook: extensionSettings.replaceNativeWorldBook,
 });
@@ -127,6 +138,8 @@ onSettingsReady(() => {
   ui.editorShowRecursion = extensionSettings.editorShowRecursion;
   ui.editorShowAutomation = extensionSettings.editorShowAutomation;
   ui.editorShowInclusionGroup = extensionSettings.editorShowInclusionGroup;
+  ui.editorNavMode = extensionSettings.editorNavMode;
+  ui.batchPinnedActions = [...extensionSettings.batchPinnedActions];
   ui.showVectorized = extensionSettings.showVectorized;
   ui.replaceNativeWorldBook = extensionSettings.replaceNativeWorldBook;
 });
@@ -159,6 +172,8 @@ watch(
     ui.editorShowRecursion,
     ui.editorShowAutomation,
     ui.editorShowInclusionGroup,
+    ui.editorNavMode,
+    JSON.stringify(ui.batchPinnedActions),
     ui.showVectorized,
     ui.replaceNativeWorldBook,
   ],
@@ -189,6 +204,8 @@ watch(
     extensionSettings.editorShowRecursion = ui.editorShowRecursion;
     extensionSettings.editorShowAutomation = ui.editorShowAutomation;
     extensionSettings.editorShowInclusionGroup = ui.editorShowInclusionGroup;
+    extensionSettings.editorNavMode = ui.editorNavMode;
+    extensionSettings.batchPinnedActions = [...ui.batchPinnedActions];
     extensionSettings.showVectorized = ui.showVectorized;
     extensionSettings.replaceNativeWorldBook = ui.replaceNativeWorldBook;
   },
@@ -213,6 +230,19 @@ export function openApp(page?: string): void {
   if (page) ui.activePage = page;
   ui.open = true;
   lastOpenedAt = performance.now();
+}
+
+export function toggleBatchPinnedAction(id: BatchActionId): void {
+  const idx = ui.batchPinnedActions.indexOf(id);
+  if (idx === -1) {
+    ui.batchPinnedActions = [...ui.batchPinnedActions, id];
+  } else {
+    ui.batchPinnedActions = ui.batchPinnedActions.filter(a => a !== id);
+  }
+}
+
+export function resetBatchPinnedActions(): void {
+  ui.batchPinnedActions = [...DEFAULT_BATCH_PINNED_ACTIONS];
 }
 
 export type CloseAppHook = () => void;

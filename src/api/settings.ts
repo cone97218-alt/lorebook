@@ -23,6 +23,55 @@ export type PanelHeight = 'compact' | 'medium' | 'large' | 'full';
 export type FontSize = 'sm' | 'md' | 'lg' | 'xl';
 export type FontFamily = 'sans' | 'mono';
 export type AutoSaveMode = 'exit' | 'idle' | 'blur' | 'manual';
+export type EditorNavMode = 'accessories' | 'footer' | 'off';
+export type BatchActionId =
+  | 'enable'
+  | 'disable'
+  | 'green'
+  | 'blue'
+  | 'purple'
+  | 'order'
+  | 'position'
+  | 'group'
+  | 'transfer'
+  | 'replace'
+  | 'export'
+  | 'import'
+  | 'delete';
+
+export const DEFAULT_BATCH_PINNED_ACTIONS: BatchActionId[] = [
+  'enable',
+  'disable',
+  'green',
+  'blue',
+  'order',
+  'delete',
+];
+
+export const BATCH_ACTION_META: ReadonlyArray<{
+  id: BatchActionId;
+  label: string;
+  title: string;
+  icon?: string;
+  dotClass?: string;
+  danger?: boolean;
+}> = [
+  { id: 'enable', label: '启用', title: '批量启用', icon: 'fa-solid fa-circle-check' },
+  { id: 'disable', label: '停用', title: '批量停用', icon: 'fa-solid fa-ban' },
+  { id: 'green', label: '绿灯', title: '批量设为绿灯 (按词触发)', dotClass: 'dot-green' },
+  { id: 'blue', label: '蓝灯', title: '批量设为蓝灯 (常驻注入)', dotClass: 'dot-blue' },
+  { id: 'purple', label: '紫灯', title: '批量设为链接 (紫灯向量化)', dotClass: 'dot-purple' },
+  { id: 'order', label: '顺序', title: '批量调整顺序 (起始值与递增步长)', icon: 'fa-solid fa-arrow-down-1-9' },
+  { id: 'position', label: '位置深度', title: '批量修改插入位置与深度', icon: 'fa-solid fa-location-dot' },
+  { id: 'group', label: '分组', title: '批量修改分组', icon: 'fa-solid fa-folder' },
+  { id: 'transfer', label: '跨书转移', title: '跨世界书批量复制 / 移动', icon: 'fa-solid fa-share-from-square' },
+  { id: 'replace', label: '查找替换', title: '全局查找与批量替换', icon: 'fa-solid fa-repeat' },
+  { id: 'export', label: '导出', title: '导出 JSON', icon: 'fa-solid fa-file-export' },
+  { id: 'import', label: '导入', title: '导入 JSON', icon: 'fa-solid fa-file-import' },
+  { id: 'delete', label: '删除', title: '批量删除', icon: 'fa-solid fa-trash-can', danger: true },
+];
+
+export const ALL_BATCH_ACTION_IDS: BatchActionId[] = BATCH_ACTION_META.map(m => m.id);
 
 export interface CustomSymbol {
   id: string;
@@ -72,6 +121,8 @@ export interface ExtensionSettings {
   editorShowRecursion: boolean;
   editorShowAutomation: boolean;
   editorShowInclusionGroup: boolean;
+  editorNavMode: EditorNavMode;
+  batchPinnedActions: BatchActionId[];
   replaceNativeWorldBook: boolean;
 }
 
@@ -107,6 +158,8 @@ export function defaultSettings(): ExtensionSettings {
     editorShowRecursion: true,
     editorShowAutomation: false,
     editorShowInclusionGroup: false,
+    editorNavMode: 'accessories',
+    batchPinnedActions: [...DEFAULT_BATCH_PINNED_ACTIONS],
     replaceNativeWorldBook: false,
   };
 }
@@ -139,6 +192,17 @@ function normalize(raw: unknown): ExtensionSettings {
   const validFontSizes: FontSize[] = ['sm', 'md', 'lg', 'xl'];
   const validFontFamilies: FontFamily[] = ['sans', 'mono'];
   const validSaveModes: AutoSaveMode[] = ['exit', 'idle', 'blur', 'manual'];
+  const validNavModes: EditorNavMode[] = ['accessories', 'footer', 'off'];
+
+  const batchPinnedActions = Array.isArray(obj.batchPinnedActions)
+    ? Array.from(
+        new Set(
+          obj.batchPinnedActions.filter((id): id is BatchActionId =>
+            ALL_BATCH_ACTION_IDS.includes(id as BatchActionId),
+          ),
+        ),
+      )
+    : [...DEFAULT_BATCH_PINNED_ACTIONS];
 
   const customSymbols = Array.isArray(obj.customSymbols) && obj.customSymbols.length > 0
     ? obj.customSymbols.map((s, i) => ({
@@ -177,6 +241,10 @@ function normalize(raw: unknown): ExtensionSettings {
     editorShowRecursion: typeof obj.editorShowRecursion === 'boolean' ? obj.editorShowRecursion : d.editorShowRecursion,
     editorShowAutomation: typeof obj.editorShowAutomation === 'boolean' ? obj.editorShowAutomation : d.editorShowAutomation,
     editorShowInclusionGroup: typeof obj.editorShowInclusionGroup === 'boolean' ? obj.editorShowInclusionGroup : d.editorShowInclusionGroup,
+    editorNavMode: validNavModes.includes(obj.editorNavMode as EditorNavMode)
+      ? (obj.editorNavMode as EditorNavMode)
+      : d.editorNavMode,
+    batchPinnedActions,
     replaceNativeWorldBook: typeof obj.replaceNativeWorldBook === 'boolean' ? obj.replaceNativeWorldBook : d.replaceNativeWorldBook,
   };
 }

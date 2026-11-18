@@ -10,6 +10,7 @@ import { registerPublicInterface } from '@/public/register';
 import { ui } from '@/state/ui';
 import { lorebookState, selectWorldBook, refreshBoundBooks } from '@/state/lorebook';
 import { lastInternalSaveTime } from '@/api/lorebook';
+import { recordHostActivation } from '@/api/activation';
 import { versionedAssetUrl } from '@/version';
 
 // 样式打包
@@ -160,6 +161,12 @@ function bindLifecycleEvents(): void {
 
   es.on(et.WORLDINFO_UPDATED, (bookName: string) => {
     syncFromHost(bookName);
+  });
+
+  const wiActivatedEvent = (et as Record<string, string>).WORLD_INFO_ACTIVATED || 'world_info_activated';
+  es.on(wiActivatedEvent, (entries: unknown) => {
+    const batch = recordHostActivation(entries);
+    lorebookState.lastActivationBatch = batch;
   });
 
   if (et.WORLDINFO_SETTINGS_UPDATED) {

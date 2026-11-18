@@ -1,15 +1,46 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, computed } from 'vue';
 import {
   ui,
+  BATCH_ACTION_META,
+  toggleBatchPinnedAction,
+  resetBatchPinnedActions,
   type ThemeName,
   type PanelPosition,
   type PanelHeight,
   type FontSize,
   type AutoSaveMode,
+  type EditorNavMode,
 } from '@/state/ui';
 import { DEFAULT_SYMBOLS, type CustomSymbol } from '@/api/settings';
 import { toast } from '@/st/toast';
+
+const navModes: { id: EditorNavMode; label: string; desc: string }[] = [
+  {
+    id: 'accessories',
+    label: '展开辅助栏内 (推荐·防误触)',
+    desc: '点开顶栏 ⌄ 时显示上/下一条与下拉跳选，写作收起时零误触',
+  },
+  {
+    id: 'footer',
+    label: '底栏右侧 (打字防误触锁定)',
+    desc: '显示在底栏右侧，正文聚焦输入及收起键盘瞬间自动锁定防误触',
+  },
+  {
+    id: 'off',
+    label: '关闭隐藏',
+    desc: '不在详情页显示上/下一条切换控件',
+  },
+];
+
+const configurableBatchActions = computed(() =>
+  BATCH_ACTION_META.filter(m => m.id !== 'purple' || ui.showVectorized),
+);
+
+function handleResetBatchPins() {
+  resetBatchPinnedActions();
+  toast('已恢复默认批量底栏布局', 'info');
+}
 
 // 折叠条展开状态管理（默认全部收起，界面清爽整洁）
 const openSections = ref({
@@ -446,6 +477,50 @@ const iconGuides = [
               <span class="switch-desc">酒馆原生互斥组，同组条目每次仅激活一条</span>
             </div>
             <input v-model="ui.editorShowInclusionGroup" type="checkbox" class="toggle-checkbox" />
+          </div>
+        </div>
+
+        <!-- 详情页上下条切换导航位置 -->
+        <div class="sub-row">
+          <span class="sub-label">详情页「上一条 / 下一条」切换导航</span>
+          <div class="mode-cards">
+            <div
+              v-for="nm in navModes"
+              :key="nm.id"
+              class="mode-card"
+              :class="{ active: ui.editorNavMode === nm.id }"
+              @click="ui.editorNavMode = nm.id"
+            >
+              <div class="mode-head">
+                <span class="mode-name">{{ nm.label }}</span>
+                <i v-if="ui.editorNavMode === nm.id" class="fa-solid fa-circle-check check-icon"></i>
+              </div>
+              <span class="mode-desc">{{ nm.desc }}</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 批量模式底栏按钮定制 -->
+        <div class="sub-row symbol-manager-box">
+          <div class="symbol-manager-head">
+            <span class="sub-label">批量模式底栏常驻按钮定制</span>
+            <button class="text-action-btn" @click="handleResetBatchPins">
+              <i class="fa-solid fa-arrow-rotate-left"></i> 恢复默认
+            </button>
+          </div>
+          <span class="switch-desc">高亮项将常驻批量底栏；其余操作自动收纳进右下角「⋯ 更多」宫格中（退出按钮固定在右上角）</span>
+          <div class="pill-group">
+            <button
+              v-for="act in configurableBatchActions"
+              :key="act.id"
+              class="pill-btn batch-pin-pill"
+              :class="{ active: ui.batchPinnedActions.includes(act.id) }"
+              @click="toggleBatchPinnedAction(act.id)"
+            >
+              <span v-if="act.dotClass" class="batch-pin-dot" :class="act.dotClass"></span>
+              <i v-else :class="act.icon"></i>
+              <span class="pill-text">{{ act.label }}</span>
+            </button>
           </div>
         </div>
       </div>
@@ -1125,5 +1200,33 @@ const iconGuides = [
   font-size: 11px;
   color: var(--myext-ink-soft);
   line-height: 1.35;
+}
+
+.batch-pin-pill {
+  padding: 6px 10px;
+}
+
+.batch-pin-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.batch-pin-pill.active .batch-pin-dot {
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.55);
+}
+
+.batch-pin-dot.dot-green {
+  background: #6e9681;
+}
+
+.batch-pin-dot.dot-blue {
+  background: #6b8ca8;
+}
+
+.batch-pin-dot.dot-purple {
+  background: #95819e;
 }
 </style>

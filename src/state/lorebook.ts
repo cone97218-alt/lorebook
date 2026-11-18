@@ -376,6 +376,48 @@ export const activeEntry = computed<WorldInfoEntry | null>(() => {
   return lorebookState.bookData.entries[lorebookState.activeUid] ?? null;
 });
 
+/**
+ * 估算文本 Token 数（中英混合权重：中文 ×0.8 + 非中文 ×0.25）
+ */
+export function estimateTextTokens(text: string): number {
+  if (!text) return 0;
+  let cjk = 0;
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    if (code >= 0x4e00 && code <= 0x9fa5) cjk++;
+  }
+  const nonCjk = text.length - cjk;
+  return Math.ceil(cjk * 0.8 + nonCjk * 0.25);
+}
+
+/**
+ * 计算单条上轮激活条目的字符数与预估 Token
+ */
+export function getActivationEntryStats(actEntry: {
+  world: string;
+  uid: string | number;
+  content?: string;
+  tokens?: number;
+}): { chars: number; tokens: number } {
+  let text = actEntry.content;
+  if (typeof text !== 'string') {
+    const numUid = Number(actEntry.uid);
+    if (actEntry.world === lorebookState.currentBook && lorebookState.bookData?.entries[numUid]) {
+      text = lorebookState.bookData.entries[numUid].content || '';
+    }
+  }
+  if (typeof text === 'string') {
+    return {
+      chars: text.length,
+      tokens: typeof actEntry.tokens === 'number' ? actEntry.tokens : estimateTextTokens(text),
+    };
+  }
+  return {
+    chars: 0,
+    tokens: typeof actEntry.tokens === 'number' ? actEntry.tokens : 0,
+  };
+}
+
 export const filteredEntries = computed<WorldInfoEntry[]>(() => {
   if (!lorebookState.bookData) return [];
   const list = Object.values(lorebookState.bookData.entries);
@@ -403,11 +445,11 @@ export const filteredEntries = computed<WorldInfoEntry[]>(() => {
         break;
       }
       case 'token_asc': {
-        res = (a.content?.length || 0) - (b.content?.length || 0);
+        res = estimateTextTokens(a.content || '') - estimateTextTokens(b.content || '');
         break;
       }
       case 'token_desc': {
-        res = (b.content?.length || 0) - (a.content?.length || 0);
+        res = estimateTextTokens(b.content || '') - estimateTextTokens(a.content || '');
         break;
       }
       case 'depth_asc': {
@@ -565,15 +607,20 @@ export const entryGroups = computed<EntryGroup[]>(() => {
 });
 
 /**
- * 世界书数据与趣味统计
+ * 世界书数据与趣味统计（仅统计当前已启用词条与上一轮实际注入词条）
  */
 export const bookStats = computed(() => {
   if (lorebookState.activeTab !== 'monitor' || !lorebookState.bookData) {
     return {
       totalEntries: 0,
       activeEntries: 0,
-      totalChars: 0,
-      estimatedTokens: 0,
+      enabledChars: 0,
+      enabledTokens: 0,
+      constantChars: 0,
+      constantTokens: 0,
+      activatedCount: 0,
+      activatedChars: 0,
+      activatedTokens: 0,
       constantCount: 0,
       selectiveCount: 0,
       vectorizedCount: 0,
@@ -582,7 +629,10 @@ export const bookStats = computed(() => {
   }
 
   const entries = Object.values(lorebookState.bookData.entries);
-  let totalChars = 0;
+  let enabledChars = 0;
+  let enabledTokens = 0;
+  let constantChars = 0;
+  let constantTokens = 0;
   let activeEntries = 0;
   let constantCount = 0;
   let selectiveCount = 0;
@@ -590,25 +640,45 @@ export const bookStats = computed(() => {
   const groups = new Set<string>();
 
   for (const e of entries) {
-    const text = (e.content || '') + (e.comment || '');
-    totalChars += text.length;
     if (!e.disable) {
+      const content = e.content || '';
+      const tk = estimateTextTokens(content);
       activeEntries++;
-      if (e.constant) constantCount++;
-      else if (e.vectorized) vectorizedCount++;
-      else selectiveCount++;
+      enabledChars += content.length;
+      enabledTokens += tk;
+      if (e.constant) {
+        constantCount++;
+        constantChars += content.length;
+        constantTokens += tk;
+      } else if (e.vectorized) {
+        vectorizedCount++;
+      } else {
+        selectiveCount++;
+      }
     }
     const grp = (e.display_group || (e as any).extensions?.display_group || '').trim();
     if (grp) groups.add(grp);
   }
 
-  const estTokens = Math.ceil(totalChars * 0.75);
+  const actEntries = lorebookState.lastActivationBatch?.entries || [];
+  let activatedChars = 0;
+  let activatedTokens = 0;
+  for (const ae of actEntries) {
+    const s = getActivationEntryStats(ae);
+    activatedChars += s.chars;
+    activatedTokens += s.tokens;
+  }
 
   return {
     totalEntries: entries.length,
     activeEntries,
-    totalChars,
-    estimatedTokens: estTokens,
+    enabledChars,
+    enabledTokens,
+    constantChars,
+    constantTokens,
+    activatedCount: actEntries.length,
+    activatedChars,
+    activatedTokens,
     constantCount,
     selectiveCount,
     vectorizedCount,
@@ -1649,6 +1719,436 @@ export function batchDisable(): void {
     void saveImmediately();
     toast(`已撤回批量停用 (${count} 项)`, 'info');
   });
+}
+
+/**
+ * 批量设置选中条目的激活策略（绿灯/蓝灯/链接）
+ */
+export function batchSetStrategy(strategy: 'green' | 'blue' | 'purple'): void {
+  if (!lorebookState.bookData || lorebookState.selectedUids.length === 0) return;
+  const count = lorebookState.selectedUids.length;
+  const prevStates: Record<number, { constant: boolean; vectorized?: boolean }> = {};
+  for (const uid of lorebookState.selectedUids) {
+    const entry = lorebookState.bookData.entries[uid];
+    if (entry) {
+      prevStates[uid] = {
+        constant: entry.constant,
+        vectorized: entry.vectorized,
+      };
+      if (strategy === 'green') {
+        entry.constant = false;
+        entry.vectorized = false;
+      } else if (strategy === 'blue') {
+        entry.constant = true;
+        entry.vectorized = false;
+      } else if (strategy === 'purple') {
+        entry.constant = false;
+        entry.vectorized = true;
+      }
+    }
+  }
+  const label = strategy === 'green' ? '绿灯' : strategy === 'blue' ? '蓝灯' : '链接';
+  markDirty();
+  void saveImmediately();
+  toast(`已将 ${count} 个条目设为${label}`, 'success');
+  recordAction(`批量将 ${count} 个条目设为${label}`, () => {
+    if (!lorebookState.bookData) return;
+    for (const [uStr, prev] of Object.entries(prevStates)) {
+      const e = lorebookState.bookData.entries[Number(uStr)];
+      if (e) {
+        e.constant = prev.constant;
+        e.vectorized = prev.vectorized;
+      }
+    }
+    markDirty();
+    void saveImmediately();
+    toast(`已撤回批量策略变更 (${count} 项)`, 'info');
+  });
+}
+
+/**
+ * 批量按起始值和步长递增/递减调整条目顺序 (Order)
+ */
+export function batchAdjustOrder(targetUids: number[], startOrder: number, step: number): void {
+  if (!lorebookState.bookData || targetUids.length === 0) return;
+  const validUids = targetUids.filter(uid => Boolean(lorebookState.bookData?.entries[uid]));
+  if (validUids.length === 0) return;
+
+  const safeStart = Number.isFinite(startOrder) ? startOrder : 100;
+  const safeStep = Number.isFinite(step) ? step : 1;
+  const prevOrders: Record<number, number> = {};
+
+  for (let i = 0; i < validUids.length; i++) {
+    const uid = validUids[i];
+    const entry = lorebookState.bookData.entries[uid];
+    if (entry) {
+      prevOrders[uid] = entry.order;
+      entry.order = Math.round(safeStart + i * safeStep);
+    }
+  }
+
+  const count = validUids.length;
+  markDirty();
+  void saveImmediately();
+  toast(`已调整 ${count} 个条目的顺序`, 'success');
+  recordAction(
+    `批量调整 ${count} 个条目顺序 (起始 ${safeStart}, 步长 ${safeStep >= 0 ? '+' : ''}${safeStep})`,
+    () => {
+      if (!lorebookState.bookData) return;
+      for (const [uStr, order] of Object.entries(prevOrders)) {
+        const e = lorebookState.bookData.entries[Number(uStr)];
+        if (e) e.order = order;
+      }
+      markDirty();
+      void saveImmediately();
+      toast(`已撤回批量顺序调整 (${count} 项)`, 'info');
+    },
+  );
+}
+
+/**
+ * 整组一键全选 / 取消全选（用于分组视图多选模式）
+ */
+export function toggleSelectGroup(groupName: string): void {
+  const grp = entryGroups.value.find(g => g.name === groupName);
+  if (!grp || grp.entries.length === 0) return;
+
+  const groupUids = grp.entries.map(e => e.uid);
+  const selectedSet = new Set(lorebookState.selectedUids);
+  const allSelected = groupUids.every(uid => selectedSet.has(uid));
+
+  if (allSelected) {
+    for (const uid of groupUids) selectedSet.delete(uid);
+  } else {
+    for (const uid of groupUids) selectedSet.add(uid);
+  }
+  lorebookState.selectedUids = Array.from(selectedSet);
+}
+
+/**
+ * 批量修改插入位置、角色与深度
+ */
+export function batchAdjustPositionAndDepth(options: {
+  targetUids: number[];
+  position: number;
+  role: number;
+  depthMode: 'keep' | 'fixed' | 'increment';
+  startDepth: number;
+  depthStep: number;
+}): void {
+  if (!lorebookState.bookData || options.targetUids.length === 0) return;
+  const validUids = options.targetUids.filter(uid => Boolean(lorebookState.bookData?.entries[uid]));
+  if (validUids.length === 0) return;
+
+  const safeStartDepth = Number.isFinite(options.startDepth) ? options.startDepth : 4;
+  const safeStep = Number.isFinite(options.depthStep) ? options.depthStep : 0;
+  const targetRole = options.position === 4 ? options.role : 0;
+
+  const prevStates: Record<number, { position: number; role?: number; depth: number }> = {};
+
+  for (let i = 0; i < validUids.length; i++) {
+    const uid = validUids[i];
+    const entry = lorebookState.bookData.entries[uid];
+    if (!entry) continue;
+
+    prevStates[uid] = {
+      position: entry.position,
+      role: entry.role,
+      depth: entry.depth,
+    };
+
+    entry.position = options.position;
+    entry.role = targetRole;
+
+    if (options.position === 4) {
+      if (options.depthMode === 'fixed') {
+        entry.depth = Math.max(0, Math.min(100, Math.round(safeStartDepth)));
+      } else if (options.depthMode === 'increment') {
+        entry.depth = Math.max(0, Math.min(100, Math.round(safeStartDepth + i * safeStep)));
+      }
+    }
+  }
+
+  const count = validUids.length;
+  markDirty();
+  void saveImmediately();
+  toast(`已更新 ${count} 个条目的插入位置/深度`, 'success');
+  recordAction(`批量修改 ${count} 个条目插入位置`, () => {
+    if (!lorebookState.bookData) return;
+    for (const [uStr, prev] of Object.entries(prevStates)) {
+      const e = lorebookState.bookData.entries[Number(uStr)];
+      if (e) {
+        e.position = prev.position;
+        e.role = prev.role;
+        e.depth = prev.depth;
+      }
+    }
+    markDirty();
+    void saveImmediately();
+    toast(`已撤回批量位置/深度修改 (${count} 项)`, 'info');
+  });
+}
+
+/**
+ * 跨世界书批量复制或移动选中条目
+ */
+export async function batchTransferEntries(options: {
+  targetBook: string;
+  mode: 'copy' | 'move';
+  targetGroupMode: 'keep' | 'custom';
+  customGroup: string;
+}): Promise<boolean> {
+  const sourceBook = lorebookState.currentBook;
+  if (!sourceBook || !lorebookState.bookData || lorebookState.selectedUids.length === 0) return false;
+  if (!options.targetBook || options.targetBook === sourceBook) {
+    toast('请选择与当前不同的目标世界书', 'warning');
+    return false;
+  }
+
+  const targetData = await fetchWorldBookData(options.targetBook, false);
+  if (!targetData) {
+    toast(`读取目标世界书《${options.targetBook}》失败`, 'warning');
+    return false;
+  }
+  if (!targetData.entries || typeof targetData.entries !== 'object') {
+    targetData.entries = {};
+  }
+
+  // 按当前筛选视图顺序排列要传输的条目，保持视觉顺序一致
+  const selectedSet = new Set(lorebookState.selectedUids);
+  const orderedSelectedUids = filteredEntries.value
+    .map(e => e.uid)
+    .filter(uid => selectedSet.has(uid));
+  for (const uid of lorebookState.selectedUids) {
+    if (!orderedSelectedUids.includes(uid) && lorebookState.bookData.entries[uid]) {
+      orderedSelectedUids.push(uid);
+    }
+  }
+  if (orderedSelectedUids.length === 0) return false;
+
+  const existingTargetUids = new Set(
+    Object.keys(targetData.entries)
+      .map(Number)
+      .filter(n => !Number.isNaN(n)),
+  );
+  let nextUid = 0;
+
+  const addedTargetUids: number[] = [];
+  const movedBackups: Record<number, WorldInfoEntry> = {};
+
+  for (const srcUid of orderedSelectedUids) {
+    const srcEntry = lorebookState.bookData.entries[srcUid];
+    if (!srcEntry) continue;
+
+    while (existingTargetUids.has(nextUid)) {
+      nextUid++;
+    }
+    const newUid = nextUid;
+    existingTargetUids.add(newUid);
+
+    const cloned: WorldInfoEntry = {
+      ...JSON.parse(JSON.stringify(srcEntry)),
+      uid: newUid,
+      displayIndex: newUid,
+    };
+
+    if (options.targetGroupMode === 'custom') {
+      const cleanGrp = options.customGroup.trim();
+      cloned.display_group = cleanGrp;
+      if (!cloned.extensions) cloned.extensions = {};
+      (cloned.extensions as any).display_group = cleanGrp;
+    }
+
+    targetData.entries[newUid] = cloned;
+    addedTargetUids.push(newUid);
+
+    if (options.mode === 'move') {
+      movedBackups[srcUid] = JSON.parse(JSON.stringify(srcEntry));
+      delete lorebookState.bookData.entries[srcUid];
+    }
+  }
+
+  if (addedTargetUids.length === 0) return false;
+
+  saveGroupStorage(options.targetBook, targetData);
+  const targetSaved = await saveWorldBookData(options.targetBook, targetData);
+  if (!targetSaved) {
+    // 写入失败时回滚源书删除操作
+    if (options.mode === 'move') {
+      for (const [uStr, backup] of Object.entries(movedBackups)) {
+        lorebookState.bookData.entries[Number(uStr)] = backup;
+      }
+    }
+    toast(`保存到目标世界书《${options.targetBook}》失败`, 'warning');
+    return false;
+  }
+
+  if (options.mode === 'move') {
+    if (lorebookState.activeUid !== null && movedBackups[lorebookState.activeUid]) {
+      lorebookState.activeUid = null;
+    }
+    lorebookState.selectedUids = [];
+    saveGroupStorage(sourceBook, lorebookState.bookData);
+    markDirty();
+    await saveImmediately();
+  }
+
+  const count = addedTargetUids.length;
+  const verb = options.mode === 'move' ? '移动' : '复制';
+  toast(`已将 ${count} 个条目${verb}至《${options.targetBook}》`, 'success');
+
+  recordAction(`将 ${count} 个条目从《${sourceBook}》${verb}至《${options.targetBook}》`, async () => {
+    const latestTarget = await fetchWorldBookData(options.targetBook, false);
+    if (latestTarget?.entries) {
+      for (const addedUid of addedTargetUids) {
+        delete latestTarget.entries[addedUid];
+      }
+      saveGroupStorage(options.targetBook, latestTarget);
+      await saveWorldBookData(options.targetBook, latestTarget);
+    }
+
+    if (options.mode === 'move') {
+      if (lorebookState.currentBook === sourceBook && lorebookState.bookData) {
+        for (const [uStr, backup] of Object.entries(movedBackups)) {
+          lorebookState.bookData.entries[Number(uStr)] = backup;
+        }
+        saveGroupStorage(sourceBook, lorebookState.bookData);
+        markDirty();
+        await saveImmediately();
+      } else {
+        const latestSource = await fetchWorldBookData(sourceBook, false);
+        if (latestSource?.entries) {
+          for (const [uStr, backup] of Object.entries(movedBackups)) {
+            latestSource.entries[Number(uStr)] = backup;
+          }
+          saveGroupStorage(sourceBook, latestSource);
+          await saveWorldBookData(sourceBook, latestSource);
+        }
+      }
+    }
+    toast(`已撤回跨书${verb} (${count} 项)`, 'info');
+  });
+
+  return true;
+}
+
+/**
+ * 全局查找与批量替换（支持当前书全部或已选条目，涵盖标题、触发词与正文）
+ */
+export function batchGlobalSearchReplace(options: {
+  scope: 'all' | 'selected';
+  searchText: string;
+  replaceText: string;
+  caseSensitive: boolean;
+  inComment: boolean;
+  inKeys: boolean;
+  inContent: boolean;
+}): { matchedEntries: number; totalReplacements: number } {
+  if (!lorebookState.bookData || !options.searchText) {
+    return { matchedEntries: 0, totalReplacements: 0 };
+  }
+
+  const targetEntries: WorldInfoEntry[] =
+    options.scope === 'selected'
+      ? lorebookState.selectedUids
+          .map(uid => lorebookState.bookData!.entries[uid])
+          .filter((e): e is WorldInfoEntry => Boolean(e))
+      : Object.values(lorebookState.bookData.entries);
+
+  if (targetEntries.length === 0) {
+    return { matchedEntries: 0, totalReplacements: 0 };
+  }
+
+  const escaped = options.searchText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const flags = options.caseSensitive ? 'g' : 'gi';
+  const regex = new RegExp(escaped, flags);
+
+  let matchedEntries = 0;
+  let totalReplacements = 0;
+  const prevBackups: Record<
+    number,
+    { comment: string; key: string[]; keysecondary: string[]; content: string }
+  > = {};
+
+  for (const entry of targetEntries) {
+    let entryHits = 0;
+    const backup = {
+      comment: entry.comment || '',
+      key: Array.isArray(entry.key) ? [...entry.key] : [],
+      keysecondary: Array.isArray(entry.keysecondary) ? [...entry.keysecondary] : [],
+      content: entry.content || '',
+    };
+
+    if (options.inComment && entry.comment) {
+      const m = entry.comment.match(regex);
+      if (m?.length) {
+        entryHits += m.length;
+        entry.comment = entry.comment.replace(regex, () => options.replaceText);
+      }
+    }
+
+    if (options.inKeys) {
+      if (Array.isArray(entry.key)) {
+        entry.key = entry.key.map(k => {
+          const m = k.match(regex);
+          if (m?.length) {
+            entryHits += m.length;
+            return k.replace(regex, () => options.replaceText);
+          }
+          return k;
+        });
+      }
+      if (Array.isArray(entry.keysecondary)) {
+        entry.keysecondary = entry.keysecondary.map(k => {
+          const m = k.match(regex);
+          if (m?.length) {
+            entryHits += m.length;
+            return k.replace(regex, () => options.replaceText);
+          }
+          return k;
+        });
+      }
+    }
+
+    if (options.inContent && entry.content) {
+      const m = entry.content.match(regex);
+      if (m?.length) {
+        entryHits += m.length;
+        entry.content = entry.content.replace(regex, () => options.replaceText);
+      }
+    }
+
+    if (entryHits > 0) {
+      prevBackups[entry.uid] = backup;
+      matchedEntries++;
+      totalReplacements += entryHits;
+    }
+  }
+
+  if (totalReplacements > 0) {
+    markDirty();
+    void saveImmediately();
+    toast(`已在 ${matchedEntries} 个条目中替换 ${totalReplacements} 处`, 'success');
+    recordAction(`全局替换「${options.searchText}」->「${options.replaceText}」(${totalReplacements}处)`, () => {
+      if (!lorebookState.bookData) return;
+      for (const [uStr, prev] of Object.entries(prevBackups)) {
+        const e = lorebookState.bookData.entries[Number(uStr)];
+        if (e) {
+          e.comment = prev.comment;
+          e.key = prev.key;
+          e.keysecondary = prev.keysecondary;
+          e.content = prev.content;
+        }
+      }
+      markDirty();
+      void saveImmediately();
+      toast(`已撤回全局替换 (${totalReplacements} 处)`, 'info');
+    });
+  } else {
+    toast('未找到匹配的文本内容', 'info');
+  }
+
+  return { matchedEntries, totalReplacements };
 }
 
 /**

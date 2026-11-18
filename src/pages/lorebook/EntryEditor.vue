@@ -3,6 +3,7 @@ import { ref, watch, computed, onMounted, onUnmounted, onDeactivated, nextTick }
 import {
   lorebookState,
   activeEntry,
+  filteredEntries,
   markDirty,
   handleBlurSave,
   saveImmediately,
@@ -668,7 +669,7 @@ function handleTouchEnd(e: TouchEvent) {
     // 排除特定组件的内部水平拖拽
     const target = e.target as HTMLElement | null;
     if (target?.tagName === 'INPUT' && (target as HTMLInputElement).type === 'range') return;
-    if (target?.closest('.symbol-accessory-bar, .key-chips-flow, .drawer-range')) return;
+    if (target?.closest('.symbol-accessory-bar, .key-chips-flow, .drawer-range, .entry-nav-bar, .footer-nav-pill')) return;
 
     // 若在正文文本域中有选区文本，避免打断用户的划词操作
     if (target?.tagName === 'TEXTAREA') {
@@ -690,12 +691,58 @@ function handleTouchEnd(e: TouchEvent) {
   }
 }
 
+const isTextareaFocused = ref(false);
+const isTypingNavLocked = ref(false);
+let typingUnlockTimer: ReturnType<typeof setTimeout> | null = null;
+
+function onTextareaFocus() {
+  if (typingUnlockTimer) {
+    clearTimeout(typingUnlockTimer);
+    typingUnlockTimer = null;
+  }
+  isTextareaFocused.value = true;
+  isTypingNavLocked.value = true;
+}
+
+const currentEntryIndex = computed(() => {
+  if (!activeEntry.value) return -1;
+  return filteredEntries.value.findIndex(e => e.uid === activeEntry.value?.uid);
+});
+
+const hasPrevEntry = computed(() => currentEntryIndex.value > 0);
+const hasNextEntry = computed(
+  () => currentEntryIndex.value !== -1 && currentEntryIndex.value < filteredEntries.value.length - 1,
+);
+
+function switchEntryByOffset(delta: -1 | 1) {
+  const list = filteredEntries.value;
+  if (list.length === 0) return;
+  const nextIdx = currentEntryIndex.value + delta;
+  if (nextIdx < 0 || nextIdx >= list.length) return;
+  flushAllSync();
+  lorebookState.activeUid = list[nextIdx].uid;
+}
+
+function onJumpEntrySelect(e: Event) {
+  const uid = Number((e.target as HTMLSelectElement).value);
+  if (Number.isNaN(uid) || uid === activeEntry.value?.uid) return;
+  flushAllSync();
+  lorebookState.activeUid = uid;
+}
+
 function handleBackClick() {
   flushAllSync();
   closeEditor();
 }
 
 function onTextareaBlur() {
+  isTextareaFocused.value = false;
+  if (typingUnlockTimer) clearTimeout(typingUnlockTimer);
+  typingUnlockTimer = setTimeout(() => {
+    isTypingNavLocked.value = false;
+    typingUnlockTimer = null;
+  }, 320);
+
   flushContentSync();
   if (contentTextarea.value) {
     updateStats(contentTextarea.value.value);
@@ -704,6 +751,10 @@ function onTextareaBlur() {
 }
 
 onUnmounted(() => {
+  if (typingUnlockTimer) {
+    clearTimeout(typingUnlockTimer);
+    typingUnlockTimer = null;
+  }
   if (unbindAppClose) {
     unbindAppClose();
     unbindAppClose = null;
@@ -882,9 +933,53 @@ onDeactivated(() => {
         </div>
       </Transition>
 
-      <!-- 辅助区：关键词与符号栏 (默认折叠以释放最大写作空间) -->
+      <!-- 辅助区：词条导航 + 关键词与符号栏 (默认折叠以释放最大写作空间) -->
       <Transition name="accessories-fold">
         <div v-show="isAccessoriesExpanded" class="accessories-wrapper">
+          <!-- 上一条 / 下一条快速切换栏（位于辅助栏内，防误触且不挤占顶栏） -->
+          <section
+            v-if="ui.editorNavMode === 'accessories' && filteredEntries.length > 1"
+            class="entry-nav-bar"
+          >
+            <button
+              class="entry-nav-btn"
+              :disabled="!hasPrevEntry"
+              @click="switchEntryByOffset(-1)"
+              title="上一条词条"
+            >
+              <i class="fa-solid fa-chevron-left"></i>
+              <span>上一条</span>
+            </button>
+
+            <div class="entry-nav-jump-wrap">
+              <select
+                class="entry-nav-jump-select"
+                :value="activeEntry.uid"
+                @change="onJumpEntrySelect"
+                title="点击快速跳转至指定词条"
+              >
+                <option
+                  v-for="(item, idx) in filteredEntries"
+                  :key="item.uid"
+                  :value="item.uid"
+                >
+                  {{ idx + 1 }}/{{ filteredEntries.length }} · {{ item.comment || `#${item.uid}` }}
+                </option>
+              </select>
+              <i class="fa-solid fa-caret-down entry-nav-jump-caret"></i>
+            </div>
+
+            <button
+              class="entry-nav-btn"
+              :disabled="!hasNextEntry"
+              @click="switchEntryByOffset(1)"
+              title="下一条词条"
+            >
+              <span>下一条</span>
+              <i class="fa-solid fa-chevron-right"></i>
+            </button>
+          </section>
+
           <!-- 关键词芯片栏 (纯图标引导) -->
           <section class="keywords-bar">
             <div class="key-chip-row">
@@ -974,6 +1069,7 @@ onDeactivated(() => {
         <textarea
           ref="contentTextarea"
           @input="onContentInput"
+          @focus="onTextareaFocus"
           @compositionstart="onCompositionStart"
           @compositionend="onCompositionEnd"
           @scroll="syncScroll"
@@ -988,8 +1084,11 @@ onDeactivated(() => {
         ></textarea>
       </main>
 
-      <!-- 底栏：统计与高级抽屉开关 (根据用户设置决定是否显示) -->
-      <footer v-if="ui.editorShowStats || ui.editorShowAdvancedDrawer" class="editor-footer">
+      <!-- 底栏：统计、可选上/下条切换与高级抽屉开关 -->
+      <footer
+        v-if="ui.editorShowStats || ui.editorShowAdvancedDrawer || (ui.editorNavMode === 'footer' && filteredEntries.length > 1)"
+        class="editor-footer"
+      >
         <div v-if="ui.editorShowStats" class="stats-icons">
           <span class="stat-pill" title="Characters">
             <i class="fa-solid fa-file-lines"></i>
@@ -1005,15 +1104,44 @@ onDeactivated(() => {
         </div>
         <div v-else></div>
 
-        <button
-          v-if="ui.editorShowAdvancedDrawer"
-          class="icon-btn"
-          :class="{ active: lorebookState.showAdvanced }"
-          @click="lorebookState.showAdvanced = !lorebookState.showAdvanced"
-          title="Advanced Parameters"
-        >
-          <i class="fa-solid fa-sliders"></i>
-        </button>
+        <div class="footer-right-group">
+          <div
+            v-if="ui.editorNavMode === 'footer' && filteredEntries.length > 1"
+            class="footer-nav-pill"
+            :class="{ 'nav-typing-locked': isTypingNavLocked }"
+            :title="isTypingNavLocked ? '输入防误触锁定中（收起键盘后可切换）' : '切换上一条 / 下一条'"
+          >
+            <button
+              class="footer-nav-btn"
+              :disabled="isTypingNavLocked || !hasPrevEntry"
+              @click="switchEntryByOffset(-1)"
+              title="上一条"
+            >
+              <i class="fa-solid fa-chevron-left"></i>
+            </button>
+            <span class="footer-nav-counter">
+              {{ currentEntryIndex >= 0 ? `${currentEntryIndex + 1}/${filteredEntries.length}` : `--/${filteredEntries.length}` }}
+            </span>
+            <button
+              class="footer-nav-btn"
+              :disabled="isTypingNavLocked || !hasNextEntry"
+              @click="switchEntryByOffset(1)"
+              title="下一条"
+            >
+              <i class="fa-solid fa-chevron-right"></i>
+            </button>
+          </div>
+
+          <button
+            v-if="ui.editorShowAdvancedDrawer"
+            class="icon-btn"
+            :class="{ active: lorebookState.showAdvanced }"
+            @click="lorebookState.showAdvanced = !lorebookState.showAdvanced"
+            title="Advanced Parameters"
+          >
+            <i class="fa-solid fa-sliders"></i>
+          </button>
+        </div>
       </footer>
 
       <!-- 高级参数抽屉 (极简滑出卡片) -->
@@ -1599,7 +1727,7 @@ onDeactivated(() => {
 .accessories-fold-enter-active,
 .accessories-fold-leave-active {
   transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1);
-  max-height: 250px;
+  max-height: 320px;
 }
 
 .accessories-fold-enter-from,
@@ -1928,5 +2056,133 @@ onDeactivated(() => {
   .content-textarea {
     font-size: 16px !important;
   }
+}
+
+/* 详情页辅助栏 & 底栏词条切换导航 */
+.entry-nav-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: var(--myext-surface-2);
+  border-bottom: 1px solid var(--myext-line);
+}
+
+.entry-nav-btn {
+  height: 28px;
+  padding: 0 9px;
+  border: 1px solid var(--myext-line);
+  border-radius: var(--myext-radius-sm);
+  background: var(--myext-surface);
+  color: var(--myext-ink);
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.15s;
+}
+
+.entry-nav-btn:active:not(:disabled) {
+  border-color: var(--myext-accent);
+  color: var(--myext-accent);
+}
+
+.entry-nav-btn:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+
+.entry-nav-jump-wrap {
+  position: relative;
+  flex: 1 1 0%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+
+.entry-nav-jump-select {
+  width: 100%;
+  min-width: 0;
+  height: 28px;
+  padding: 0 22px 0 8px;
+  border: 1px solid var(--myext-line);
+  border-radius: var(--myext-radius-sm);
+  background: var(--myext-surface);
+  color: var(--myext-ink);
+  font-size: 12px;
+  outline: none;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.entry-nav-jump-select:focus {
+  border-color: var(--myext-accent);
+}
+
+.entry-nav-jump-caret {
+  position: absolute;
+  right: 7px;
+  font-size: 10px;
+  color: var(--myext-ink-muted);
+  pointer-events: none;
+}
+
+.footer-right-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.footer-nav-pill {
+  display: inline-flex;
+  align-items: center;
+  height: 36px;
+  border: 1px solid var(--myext-line);
+  border-radius: var(--myext-radius-sm);
+  background: var(--myext-surface-2);
+  overflow: hidden;
+  transition: opacity 0.15s;
+}
+
+.footer-nav-pill.nav-typing-locked {
+  opacity: 0.42;
+}
+
+.footer-nav-btn {
+  width: 30px;
+  height: 100%;
+  border: none;
+  background: transparent;
+  color: var(--myext-ink);
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.footer-nav-btn:active:not(:disabled) {
+  color: var(--myext-accent);
+}
+
+.footer-nav-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.footer-nav-counter {
+  font-size: 11px;
+  font-family: var(--myext-font-mono);
+  color: var(--myext-ink-soft);
+  padding: 0 4px;
+  border-left: 1px solid var(--myext-line);
+  border-right: 1px solid var(--myext-line);
+  line-height: 20px;
 }
 </style>

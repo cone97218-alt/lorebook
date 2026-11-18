@@ -40,6 +40,14 @@ import {
   deselectAll,
   batchEnable,
   batchDisable,
+  batchSetStrategy,
+  batchAdjustOrder,
+  batchAdjustPositionAndDepth,
+  batchTransferEntries,
+  batchGlobalSearchReplace,
+  toggleSelectGroup,
+  estimateTextTokens,
+  getActivationEntryStats,
   batchDelete,
   batchSetGroup,
   batchExportJson,
@@ -52,8 +60,15 @@ import {
   type SnapshotDiff,
   type WorldBookTab,
   type BookScopeFilter,
+  type EntryGroup,
 } from '@/state/lorebook';
-import { ui } from '@/state/ui';
+import {
+  ui,
+  BATCH_ACTION_META,
+  toggleBatchPinnedAction,
+  resetBatchPinnedActions,
+  type BatchActionId,
+} from '@/state/ui';
 import { toast } from '@/st/toast';
 import { historyList, undoAction, clearHistory } from '@/state/history';
 
@@ -70,6 +85,33 @@ const entryToDelete = ref<number | null>(null);
 const showBatchDeleteModal = ref(false);
 const showBatchGroupModal = ref(false);
 const batchGroupName = ref('');
+const showBatchOrderModal = ref(false);
+const batchOrderScope = ref<'selected' | 'from_start'>('selected');
+const batchOrderStartUid = ref<number | null>(null);
+const batchOrderStartVal = ref<number>(100);
+const batchOrderStep = ref<number>(1);
+const showBatchPosModal = ref(false);
+const batchPosKey = ref('4_0');
+const batchDepthMode = ref<'fixed' | 'increment' | 'keep'>('fixed');
+const batchDepthStart = ref<number>(4);
+const batchDepthStep = ref<number>(1);
+const showBatchTransferModal = ref(false);
+const batchTransferTargetBook = ref('');
+const batchTransferMode = ref<'copy' | 'move'>('copy');
+const batchTransferGroupMode = ref<'keep' | 'custom'>('keep');
+const batchTransferCustomGroup = ref('');
+const isBatchTransferring = ref(false);
+const showGlobalReplaceModal = ref(false);
+const globalReplaceScope = ref<'all' | 'selected'>('all');
+const globalSearchText = ref('');
+const globalReplaceText = ref('');
+const globalReplaceCaseSensitive = ref(false);
+const globalReplaceInComment = ref(true);
+const globalReplaceInKeys = ref(true);
+const globalReplaceInContent = ref(true);
+const tokenStatMode = ref<'enabled' | 'activated'>('enabled');
+const showBatchMoreMenu = ref(false);
+const isEditingBatchPins = ref(false);
 const showImportModal = ref(false);
 const importJsonText = ref('');
 const showCreateSnapshotModal = ref(false);
@@ -145,6 +187,40 @@ function onStrategySelect(uid: number, event: Event) {
   setEntryStrategy(uid, target.value as 'green' | 'blue' | 'purple');
 }
 
+// 插入深度与位置小标签映射 (区分 D系统 / D用户 / Dai)
+function getDepthRoleLabel(entry: { role?: number }): string {
+  if (entry.role === 1) return 'D用户';
+  if (entry.role === 2) return 'Dai';
+  return 'D系统';
+}
+
+function getDepthRoleClass(entry: { role?: number }): string {
+  if (entry.role === 1) return 'tag-depth-user';
+  if (entry.role === 2) return 'tag-depth-ai';
+  return 'tag-depth-sys';
+}
+
+function getPositionLabel(entry: { position?: number }): string {
+  switch (entry.position) {
+    case 0:
+      return '角色前';
+    case 1:
+      return '角色后';
+    case 2:
+      return '作者注释前';
+    case 3:
+      return '作者注释后';
+    case 5:
+      return '示例前';
+    case 6:
+      return '示例后';
+    case 7:
+      return '锚点';
+    default:
+      return '';
+  }
+}
+
 // 触摸左右滑动切换视图
 let touchStartX = 0;
 let touchStartY = 0;
@@ -165,7 +241,7 @@ function handleTouchEnd(e: TouchEvent) {
       const target = e.target as HTMLElement | null;
       if (
         target?.closest(
-          '.book-scope-bar, .batch-actions-scroll, .view-tabs-bar, .modal-box, .group-drag-handle, .group-sort-btns, .book-bind-menu, select, input'
+          '.book-scope-bar, .batch-actions-scroll, .batch-floating-bar, .batch-more-popover, .view-tabs-bar, .modal-box, .group-drag-handle, .group-sort-btns, .book-bind-menu, select, input'
         )
       )
         return;
@@ -398,6 +474,424 @@ function handleExecuteBatchGroup() {
   batchSetGroup(batchGroupName.value);
   batchGroupName.value = '';
   showBatchGroupModal.value = false;
+}
+
+// ================= 批量调整顺序 (起始点 + 递增步长) =================
+const batchOrderQuickSteps = [
+  { value: 1, label: '+1' },
+  { value: 2, label: '+2' },
+  { value: 5, label: '+5' },
+  { value: 10, label: '+10' },
+  { value: 0, label: '0 (同值)' },
+  { value: -1, label: '-1' },
+];
+
+const currentViewOrderedEntries = computed(() => {
+  if (lorebookState.activeTab === 'groups') {
+    return entryGroups.value.flatMap(g => g.entries);
+  }
+  return filteredEntries.value;
+});
+
+const batchOrderCandidateEntries = computed(() => {
+  const ordered = currentViewOrderedEntries.value;
+  if (batchOrderScope.value === 'selected') {
+    const selectedSet = new Set(lorebookState.selectedUids);
+    return ordered.filter(e => selectedSet.has(e.uid));
+  }
+  return ordered;
+});
+
+const batchOrderTargetEntries = computed(() => {
+  const base = batchOrderCandidateEntries.value;
+  if (base.length === 0) return [];
+  if (batchOrderStartUid.value === null) return base;
+  const idx = base.findIndex(e => e.uid === batchOrderStartUid.value);
+  if (idx === -1) return base;
+  return base.slice(idx);
+});
+
+const batchOrderPreviewList = computed(() => {
+  const start = Number.isFinite(Number(batchOrderStartVal.value)) ? Number(batchOrderStartVal.value) : 100;
+  const step = Number.isFinite(Number(batchOrderStep.value)) ? Number(batchOrderStep.value) : 1;
+  return batchOrderTargetEntries.value.map((entry, idx) => ({
+    uid: entry.uid,
+    title: entry.comment || `#${entry.uid}`,
+    oldOrder: entry.order ?? 100,
+    newOrder: Math.round(start + idx * step),
+  }));
+});
+
+function syncBatchOrderStartEntry(uid: number | null) {
+  batchOrderStartUid.value = uid;
+  if (uid === null) return;
+  const target = currentViewOrderedEntries.value.find(e => e.uid === uid);
+  if (target) {
+    batchOrderStartVal.value = target.order ?? 100;
+  }
+}
+
+function openBatchOrderModal() {
+  const ordered = currentViewOrderedEntries.value;
+  if (ordered.length === 0) return;
+  const selectedSet = new Set(lorebookState.selectedUids);
+  const orderedSelected = ordered.filter(e => selectedSet.has(e.uid));
+
+  batchOrderScope.value = orderedSelected.length >= 2 ? 'selected' : 'from_start';
+  const defaultStart = orderedSelected[0] || ordered[0];
+  syncBatchOrderStartEntry(defaultStart ? defaultStart.uid : null);
+  batchOrderStep.value = 1;
+  showBatchOrderModal.value = true;
+}
+
+function setBatchOrderScope(scope: 'selected' | 'from_start') {
+  if (scope === 'selected' && lorebookState.selectedUids.length === 0) return;
+  batchOrderScope.value = scope;
+  const candidates = batchOrderCandidateEntries.value;
+  if (candidates.length > 0) {
+    const exists = candidates.some(e => e.uid === batchOrderStartUid.value);
+    if (!exists) {
+      syncBatchOrderStartEntry(candidates[0].uid);
+    }
+  }
+}
+
+function onBatchOrderStartChange(event: Event) {
+  const val = Number((event.target as HTMLSelectElement).value);
+  if (!Number.isNaN(val)) {
+    syncBatchOrderStartEntry(val);
+  }
+}
+
+function handleExecuteBatchOrder() {
+  const targetUids = batchOrderTargetEntries.value.map(e => e.uid);
+  if (targetUids.length === 0) return;
+  const start = Number.isFinite(Number(batchOrderStartVal.value)) ? Number(batchOrderStartVal.value) : 100;
+  const step = Number.isFinite(Number(batchOrderStep.value)) ? Number(batchOrderStep.value) : 1;
+  batchAdjustOrder(targetUids, start, step);
+  showBatchOrderModal.value = false;
+}
+
+// ================= 分组全选状态 =================
+function getGroupSelectionState(grp: EntryGroup): 'all' | 'partial' | 'none' {
+  if (grp.entries.length === 0) return 'none';
+  const selectedSet = new Set(lorebookState.selectedUids);
+  let selectedCount = 0;
+  for (const e of grp.entries) {
+    if (selectedSet.has(e.uid)) selectedCount++;
+  }
+  if (selectedCount === 0) return 'none';
+  if (selectedCount === grp.entries.length) return 'all';
+  return 'partial';
+}
+
+// ================= 批量修改插入位置与深度 =================
+const batchPositionOptions = [
+  { pos: 0, role: 0, label: '角色定义前 (↑Char)' },
+  { pos: 1, role: 0, label: '角色定义后 (↓Char)' },
+  { pos: 5, role: 0, label: '示例消息前 (↑EM)' },
+  { pos: 6, role: 0, label: '示例消息后 (↓EM)' },
+  { pos: 2, role: 0, label: '作者注释前 (↑AN)' },
+  { pos: 3, role: 0, label: '作者注释后 (↓AN)' },
+  { pos: 4, role: 0, label: 'D系统 (深度注入)' },
+  { pos: 4, role: 1, label: 'D用户 (深度注入)' },
+  { pos: 4, role: 2, label: 'Dai (深度注入)' },
+  { pos: 7, role: 0, label: '锚点 (Outlet)' },
+];
+
+const batchPosSelectedEntries = computed(() => {
+  const selectedSet = new Set(lorebookState.selectedUids);
+  return currentViewOrderedEntries.value.filter(e => selectedSet.has(e.uid));
+});
+
+const batchPosIsDepthMode = computed(() => batchPosKey.value.startsWith('4_'));
+
+function formatEntryPosShort(pos: number, role: number | undefined, depth: number): string {
+  if (pos === 4) {
+    return `${getDepthRoleLabel({ role })} ${depth}`;
+  }
+  return getPositionLabel({ position: pos }) || `位置${pos}`;
+}
+
+const batchPosPreviewList = computed(() => {
+  const [pos, role] = batchPosKey.value.split('_').map(Number);
+  const startDepth = Number.isFinite(Number(batchDepthStart.value)) ? Number(batchDepthStart.value) : 4;
+  const step = Number.isFinite(Number(batchDepthStep.value)) ? Number(batchDepthStep.value) : 0;
+
+  return batchPosSelectedEntries.value.map((entry, idx) => {
+    const oldLabel = formatEntryPosShort(entry.position ?? 0, entry.role, entry.depth ?? 4);
+    let targetDepth = entry.depth ?? 4;
+    if (pos === 4) {
+      if (batchDepthMode.value === 'fixed') {
+        targetDepth = Math.max(0, Math.min(100, Math.round(startDepth)));
+      } else if (batchDepthMode.value === 'increment') {
+        targetDepth = Math.max(0, Math.min(100, Math.round(startDepth + idx * step)));
+      }
+    }
+    const newLabel = formatEntryPosShort(pos, role, targetDepth);
+    return {
+      uid: entry.uid,
+      title: entry.comment || `#${entry.uid}`,
+      oldLabel,
+      newLabel,
+      changed: oldLabel !== newLabel,
+    };
+  });
+});
+
+function openBatchPosModal() {
+  if (batchPosSelectedEntries.value.length === 0) return;
+  const first = batchPosSelectedEntries.value[0];
+  batchPosKey.value = `${first.position ?? 0}_${first.role ?? 0}`;
+  batchDepthMode.value = 'fixed';
+  batchDepthStart.value = first.depth ?? 4;
+  batchDepthStep.value = 1;
+  showBatchPosModal.value = true;
+}
+
+function handleExecuteBatchPos() {
+  const targetUids = batchPosSelectedEntries.value.map(e => e.uid);
+  if (targetUids.length === 0) return;
+  const [position, role] = batchPosKey.value.split('_').map(Number);
+  batchAdjustPositionAndDepth({
+    targetUids,
+    position,
+    role,
+    depthMode: batchDepthMode.value,
+    startDepth: Number(batchDepthStart.value),
+    depthStep: Number(batchDepthStep.value),
+  });
+  showBatchPosModal.value = false;
+}
+
+// ================= 跨世界书批量复制 / 移动 =================
+const availableTransferTargetBooks = computed(() =>
+  lorebookState.books.filter(b => b !== lorebookState.currentBook),
+);
+
+function openBatchTransferModal() {
+  if (lorebookState.selectedUids.length === 0) return;
+  if (availableTransferTargetBooks.value.length === 0) {
+    toast('暂无其他可复制或移动的目标世界书', 'warning');
+    return;
+  }
+  if (!availableTransferTargetBooks.value.includes(batchTransferTargetBook.value)) {
+    batchTransferTargetBook.value = availableTransferTargetBooks.value[0];
+  }
+  batchTransferMode.value = 'copy';
+  batchTransferGroupMode.value = 'keep';
+  batchTransferCustomGroup.value = '';
+  showBatchTransferModal.value = true;
+}
+
+async function handleExecuteBatchTransfer() {
+  if (isBatchTransferring.value || !batchTransferTargetBook.value) return;
+  isBatchTransferring.value = true;
+  try {
+    const ok = await batchTransferEntries({
+      targetBook: batchTransferTargetBook.value,
+      mode: batchTransferMode.value,
+      targetGroupMode: batchTransferGroupMode.value,
+      customGroup: batchTransferCustomGroup.value,
+    });
+    if (ok) {
+      showBatchTransferModal.value = false;
+    }
+  } finally {
+    isBatchTransferring.value = false;
+  }
+}
+
+// ================= 全局查找与批量替换 =================
+const globalReplacePreview = computed(() => {
+  const query = globalSearchText.value;
+  if (!query || !lorebookState.bookData) {
+    return { totalEntriesMatched: 0, totalHits: 0, items: [] as Array<{ uid: number; title: string; hits: number; fields: string[] }> };
+  }
+
+  const targetEntries =
+    globalReplaceScope.value === 'selected'
+      ? lorebookState.selectedUids
+          .map(uid => lorebookState.bookData!.entries[uid])
+          .filter(Boolean)
+      : Object.values(lorebookState.bookData.entries).sort((a, b) => (a.order ?? 100) - (b.order ?? 100) || a.uid - b.uid);
+
+  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const regex = new RegExp(escaped, globalReplaceCaseSensitive.value ? 'g' : 'gi');
+
+  let totalHits = 0;
+  const items: Array<{ uid: number; title: string; hits: number; fields: string[] }> = [];
+
+  for (const entry of targetEntries) {
+    let entryHits = 0;
+    const fields: string[] = [];
+
+    if (globalReplaceInComment.value && entry.comment) {
+      const m = entry.comment.match(regex);
+      if (m?.length) {
+        entryHits += m.length;
+        fields.push('标题');
+      }
+    }
+
+    if (globalReplaceInKeys.value) {
+      let keyHits = 0;
+      for (const k of entry.key || []) {
+        const m = k.match(regex);
+        if (m?.length) keyHits += m.length;
+      }
+      for (const k of entry.keysecondary || []) {
+        const m = k.match(regex);
+        if (m?.length) keyHits += m.length;
+      }
+      if (keyHits > 0) {
+        entryHits += keyHits;
+        fields.push('触发词');
+      }
+    }
+
+    if (globalReplaceInContent.value && entry.content) {
+      const m = entry.content.match(regex);
+      if (m?.length) {
+        entryHits += m.length;
+        fields.push('正文');
+      }
+    }
+
+    if (entryHits > 0) {
+      totalHits += entryHits;
+      items.push({
+        uid: entry.uid,
+        title: entry.comment || `#${entry.uid}`,
+        hits: entryHits,
+        fields,
+      });
+    }
+  }
+
+  return {
+    totalEntriesMatched: items.length,
+    totalHits,
+    items,
+  };
+});
+
+function openGlobalReplaceModal(preferSelected = false) {
+  if (!lorebookState.bookData) return;
+  globalReplaceScope.value = preferSelected && lorebookState.selectedUids.length > 0 ? 'selected' : 'all';
+  if (!globalSearchText.value && lorebookState.searchQuery.trim()) {
+    globalSearchText.value = lorebookState.searchQuery.trim();
+  }
+  showGlobalReplaceModal.value = true;
+}
+
+function handleExecuteGlobalReplace() {
+  if (!globalSearchText.value) return;
+  const res = batchGlobalSearchReplace({
+    scope: globalReplaceScope.value,
+    searchText: globalSearchText.value,
+    replaceText: globalReplaceText.value,
+    caseSensitive: globalReplaceCaseSensitive.value,
+    inComment: globalReplaceInComment.value,
+    inKeys: globalReplaceInKeys.value,
+    inContent: globalReplaceInContent.value,
+  });
+  if (res.totalReplacements > 0) {
+    showGlobalReplaceModal.value = false;
+  }
+}
+
+// ================= 批量底栏按钮与「更多」自定义面板 =================
+const visibleBatchActions = computed(() =>
+  BATCH_ACTION_META.filter(item => item.id !== 'purple' || ui.showVectorized),
+);
+
+const pinnedBatchActions = computed(() => {
+  const pinnedSet = new Set(ui.batchPinnedActions);
+  return visibleBatchActions.value.filter(item => pinnedSet.has(item.id));
+});
+
+const moreBatchActions = computed(() => {
+  const pinnedSet = new Set(ui.batchPinnedActions);
+  return visibleBatchActions.value.filter(item => !pinnedSet.has(item.id));
+});
+
+function closeBatchBar() {
+  lorebookState.isBatchMode = false;
+  showBatchMoreMenu.value = false;
+  isEditingBatchPins.value = false;
+}
+
+function isBatchActionDisabled(id: BatchActionId): boolean {
+  switch (id) {
+    case 'enable':
+    case 'disable':
+    case 'green':
+    case 'blue':
+    case 'purple':
+    case 'position':
+    case 'group':
+    case 'transfer':
+    case 'delete':
+      return lorebookState.selectedUids.length === 0;
+    case 'order':
+      return currentViewOrderedEntries.value.length === 0;
+    case 'replace':
+    case 'export':
+    case 'import':
+      return !lorebookState.bookData;
+    default:
+      return false;
+  }
+}
+
+function executeBatchAction(id: BatchActionId, closeMore = false) {
+  if (isBatchActionDisabled(id)) return;
+  if (closeMore) {
+    showBatchMoreMenu.value = false;
+    isEditingBatchPins.value = false;
+  }
+  switch (id) {
+    case 'enable':
+      batchEnable();
+      break;
+    case 'disable':
+      batchDisable();
+      break;
+    case 'green':
+      batchSetStrategy('green');
+      break;
+    case 'blue':
+      batchSetStrategy('blue');
+      break;
+    case 'purple':
+      batchSetStrategy('purple');
+      break;
+    case 'order':
+      openBatchOrderModal();
+      break;
+    case 'position':
+      openBatchPosModal();
+      break;
+    case 'group':
+      showBatchGroupModal.value = true;
+      break;
+    case 'transfer':
+      openBatchTransferModal();
+      break;
+    case 'replace':
+      openGlobalReplaceModal(true);
+      break;
+    case 'export':
+      batchExportJson();
+      break;
+    case 'import':
+      showImportModal.value = true;
+      break;
+    case 'delete':
+      showBatchDeleteModal.value = true;
+      break;
+  }
 }
 
 // ================= 世界书绑定状态与切换 =================
@@ -800,6 +1294,15 @@ function onGroupTouchEnd() {
             </button>
 
             <button
+              v-if="lorebookState.currentBook"
+              class="book-tools-menu-item"
+              @click="openGlobalReplaceModal(false); showBookToolsMenu = false"
+            >
+              <i class="fa-solid fa-repeat"></i>
+              <span>全局查找与批量替换</span>
+            </button>
+
+            <button
               class="book-tools-menu-item"
               @click="openBatchBookModal(); showBookToolsMenu = false"
             >
@@ -881,13 +1384,24 @@ function onGroupTouchEnd() {
             placeholder="..."
             class="search-input"
           />
-          <button
-            v-if="lorebookState.searchQuery"
-            class="clear-search-btn"
-            @click="lorebookState.searchQuery = ''"
-          >
-            <i class="fa-solid fa-xmark"></i>
-          </button>
+          <div class="search-right-tools">
+            <button
+              v-if="lorebookState.searchQuery"
+              class="search-inline-btn"
+              @click="lorebookState.searchQuery = ''"
+              title="清空搜索"
+            >
+              <i class="fa-solid fa-xmark"></i>
+            </button>
+            <button
+              v-if="lorebookState.currentBook"
+              class="search-inline-btn"
+              @click="openGlobalReplaceModal(false)"
+              title="全局查找与批量替换"
+            >
+              <i class="fa-solid fa-repeat"></i>
+            </button>
+          </div>
         </div>
 
         <!-- 排序下拉列表 (对齐酒馆原生功能，支持各世界书独立绑定记忆) -->
@@ -1044,14 +1558,16 @@ function onGroupTouchEnd() {
                 </span>
 
                 <!-- 位置与深度注明 -->
-                <span v-if="entry.position === 4" class="badge-tag tag-depth">@D{{ entry.depth ?? 4 }}</span>
-                <span v-else-if="entry.position === 0" class="badge-tag tag-pos">角色前</span>
-                <span v-else-if="entry.position === 1" class="badge-tag tag-pos">角色后</span>
-                <span v-else-if="entry.position === 2" class="badge-tag tag-pos">作者注释前</span>
-                <span v-else-if="entry.position === 3" class="badge-tag tag-pos">作者注释后</span>
+                <span v-if="entry.position === 4" class="badge-tag" :class="getDepthRoleClass(entry)">
+                  {{ getDepthRoleLabel(entry) }} {{ entry.depth ?? 4 }}
+                </span>
+                <span v-else-if="getPositionLabel(entry)" class="badge-tag tag-pos">
+                  {{ getPositionLabel(entry) }}
+                </span>
 
-                <!-- 顺序号注明 -->
+                <!-- 顺序号与单条预估 Token 微标 -->
                 <span class="badge-order">#{{ entry.order ?? 100 }}</span>
+                <span class="badge-token" title="正文预估 Token">~{{ estimateTextTokens(entry.content || '') }}tk</span>
               </div>
 
               <!-- 关键词流 -->
@@ -1101,6 +1617,22 @@ function onGroupTouchEnd() {
               @click="toggleGroupFold(grp.name)"
             >
               <div class="group-lead-info">
+                <button
+                  v-if="lorebookState.isBatchMode"
+                  class="batch-check-btn group-batch-check-btn"
+                  @click.stop="toggleSelectGroup(grp.name)"
+                  :title="getGroupSelectionState(grp) === 'all' ? '取消全选本组' : '一键全选本组'"
+                >
+                  <i
+                    :class="
+                      getGroupSelectionState(grp) === 'all'
+                        ? 'fa-solid fa-circle-check text-accent'
+                        : getGroupSelectionState(grp) === 'partial'
+                        ? 'fa-solid fa-circle-minus text-accent'
+                        : 'fa-regular fa-circle text-muted'
+                    "
+                  ></i>
+                </button>
                 <span
                   v-if="entryGroups.length > 1"
                   class="group-drag-handle"
@@ -1171,16 +1703,24 @@ function onGroupTouchEnd() {
                 :class="{
                   active: lorebookState.activeUid === entry.uid,
                   disabled: entry.disable,
+                  selected: lorebookState.selectedUids.includes(entry.uid),
                 }"
-                @click="openEntry(entry.uid)"
+                @click="lorebookState.isBatchMode ? toggleSelectUid(entry.uid) : openEntry(entry.uid)"
               >
                 <!-- 第一行：标题 + 右侧快捷操作 -->
                 <div class="card-row-top">
                   <div class="card-row-lead">
+                    <button
+                      v-if="lorebookState.isBatchMode"
+                      class="batch-check-btn"
+                      @click.stop="toggleSelectUid(entry.uid)"
+                    >
+                      <i :class="lorebookState.selectedUids.includes(entry.uid) ? 'fa-solid fa-circle-check text-accent' : 'fa-regular fa-circle text-muted'"></i>
+                    </button>
                     <span class="entry-title">{{ entry.comment || '---' }}</span>
                   </div>
 
-                  <div class="card-quick-actions">
+                  <div class="card-quick-actions" v-if="!lorebookState.isBatchMode">
                     <button
                       class="card-status-toggle-btn"
                       @click.stop="toggleEntryDisable(entry.uid)"
@@ -1245,10 +1785,14 @@ function onGroupTouchEnd() {
                       <i class="fa-solid fa-arrows-split-up-and-left"></i>
                       互斥: {{ entry.group }}
                     </span>
-                    <span v-if="entry.position === 4" class="badge-tag tag-depth">@D{{ entry.depth ?? 4 }}</span>
-                    <span v-else-if="entry.position === 0" class="badge-tag tag-pos">角色前</span>
-                    <span v-else-if="entry.position === 1" class="badge-tag tag-pos">角色后</span>
+                    <span v-if="entry.position === 4" class="badge-tag" :class="getDepthRoleClass(entry)">
+                      {{ getDepthRoleLabel(entry) }} {{ entry.depth ?? 4 }}
+                    </span>
+                    <span v-else-if="getPositionLabel(entry)" class="badge-tag tag-pos">
+                      {{ getPositionLabel(entry) }}
+                    </span>
                     <span class="badge-order">#{{ entry.order ?? 100 }}</span>
+                    <span class="badge-token" title="正文预估 Token">~{{ estimateTextTokens(entry.content || '') }}tk</span>
                   </div>
 
                   <div class="card-keywords" v-if="entry.key && entry.key.length > 0">
@@ -1376,10 +1920,44 @@ function onGroupTouchEnd() {
           </div>
 
           <div class="stat-metric-card">
-            <span class="metric-label">字符与预估 Token</span>
-            <div class="metric-value">
-              <span class="num-highlight">~{{ bookStats.estimatedTokens }}</span>
-              <span class="num-sub">tk ({{ bookStats.totalChars }} 字)</span>
+            <div class="metric-label-row">
+              <span class="metric-label">{{ tokenStatMode === 'enabled' ? '当前启用 Token' : '上轮注入 Token' }}</span>
+              <div class="metric-mode-pills">
+                <button
+                  type="button"
+                  class="metric-mode-pill"
+                  :class="{ active: tokenStatMode === 'enabled' }"
+                  @click="tokenStatMode = 'enabled'"
+                  title="仅统计当前已启用词条的正文 Token"
+                >
+                  启用
+                </button>
+                <button
+                  type="button"
+                  class="metric-mode-pill"
+                  :class="{ active: tokenStatMode === 'activated' }"
+                  @click="tokenStatMode = 'activated'"
+                  title="统计上一轮实际注入的词条 Token"
+                >
+                  上轮
+                </button>
+              </div>
+            </div>
+            <div v-if="tokenStatMode === 'enabled'" class="metric-value">
+              <span class="num-highlight">~{{ bookStats.enabledTokens }}</span>
+              <span class="num-sub">tk ({{ bookStats.enabledChars }} 字)</span>
+            </div>
+            <div v-else class="metric-value">
+              <span class="num-highlight">~{{ bookStats.activatedTokens }}</span>
+              <span class="num-sub">tk ({{ bookStats.activatedCount }} 条)</span>
+            </div>
+            <div class="metric-sub-hint">
+              <span v-if="tokenStatMode === 'enabled'">
+                常驻保底 ~{{ bookStats.constantTokens }}tk · 上轮注入 ~{{ bookStats.activatedTokens }}tk
+              </span>
+              <span v-else>
+                当前启用 ~{{ bookStats.enabledTokens }}tk · 常驻保底 ~{{ bookStats.constantTokens }}tk
+              </span>
             </div>
           </div>
 
@@ -1430,6 +2008,7 @@ function onGroupTouchEnd() {
                 <span class="act-entry-title">{{ entry.displayName }}</span>
               </div>
               <div class="act-card-right">
+                <span v-if="getActivationEntryStats(entry).tokens > 0" class="badge-token">~{{ getActivationEntryStats(entry).tokens }}tk</span>
                 <span v-if="entry.constant" class="badge-tag tag-blue">常驻</span>
                 <span v-else class="badge-tag tag-green">按词触发</span>
                 <span v-if="entry.position" class="badge-tag tag-depth">{{ entry.position }}</span>
@@ -1444,13 +2023,89 @@ function onGroupTouchEnd() {
     <!-- 底部批量整理浮动栏 (仅在 isBatchMode 时浮起) -->
     <Transition name="slide-up">
       <footer v-if="lorebookState.isBatchMode" class="batch-floating-bar">
+        <!-- 更多面板点击外部关闭遮罩 -->
+        <div
+          v-if="showBatchMoreMenu"
+          class="batch-more-backdrop"
+          @click="showBatchMoreMenu = false; isEditingBatchPins = false"
+        ></div>
+
+        <!-- 向上弹出的「更多批量操作 / 自定义底栏」宫格面板 -->
+        <Transition name="more-pop">
+          <div v-if="showBatchMoreMenu" class="batch-more-popover">
+            <div class="batch-more-head">
+              <span class="batch-more-title">
+                {{ isEditingBatchPins ? '自定义底栏常驻按钮' : '更多批量操作' }}
+              </span>
+              <div class="batch-more-head-actions">
+                <button
+                  v-if="isEditingBatchPins"
+                  type="button"
+                  class="mini-tool-btn"
+                  @click="resetBatchPinnedActions"
+                >
+                  恢复默认
+                </button>
+                <button
+                  type="button"
+                  class="mini-tool-btn"
+                  :class="{ 'btn-pin-done': isEditingBatchPins }"
+                  @click="isEditingBatchPins = !isEditingBatchPins"
+                >
+                  {{ isEditingBatchPins ? '完成' : '自定义' }}
+                </button>
+              </div>
+            </div>
+
+            <template v-if="isEditingBatchPins">
+              <p class="batch-pin-tip">点击切换：高亮为常驻底栏，未高亮收纳在「更多」菜单</p>
+              <div class="batch-more-grid">
+                <button
+                  v-for="act in visibleBatchActions"
+                  :key="act.id"
+                  type="button"
+                  class="batch-more-cell"
+                  :class="{ pinned: ui.batchPinnedActions.includes(act.id) }"
+                  @click="toggleBatchPinnedAction(act.id)"
+                >
+                  <span v-if="act.dotClass" class="batch-light-dot" :class="act.dotClass"></span>
+                  <i v-else :class="act.icon"></i>
+                  <span class="batch-more-cell-label">{{ act.label }}</span>
+                </button>
+              </div>
+            </template>
+
+            <template v-else>
+              <div v-if="moreBatchActions.length === 0" class="batch-more-empty">
+                全部操作均已常驻底栏，可点右上角「自定义」收纳
+              </div>
+              <div v-else class="batch-more-grid">
+                <button
+                  v-for="act in moreBatchActions"
+                  :key="act.id"
+                  type="button"
+                  class="batch-more-cell"
+                  :class="{ danger: act.danger }"
+                  :disabled="isBatchActionDisabled(act.id)"
+                  @click="executeBatchAction(act.id, true)"
+                  :title="act.title"
+                >
+                  <span v-if="act.dotClass" class="batch-light-dot" :class="act.dotClass"></span>
+                  <i v-else :class="act.icon"></i>
+                  <span class="batch-more-cell-label">{{ act.label }}</span>
+                </button>
+              </div>
+            </template>
+          </div>
+        </Transition>
+
         <div class="batch-bar-lead">
           <div class="batch-counter-box">
             <span class="batch-count-text">已选 {{ lorebookState.selectedUids.length }}/{{ filteredEntries.length }}</span>
             <span v-if="lorebookState.isRangeMode" class="badge-tag tag-range">连选模式中</span>
           </div>
 
-          <!-- 快捷勾选控制: 全选、反选、连选 -->
+          <!-- 快捷勾选控制 + 固定退出按钮 -->
           <div class="batch-select-shortcuts">
             <button
               class="batch-tool-btn"
@@ -1475,63 +2130,41 @@ function onGroupTouchEnd() {
             >
               <i class="fa-solid fa-arrows-left-right-to-line"></i>
             </button>
+            <button
+              class="batch-tool-btn btn-exit-batch"
+              @click="closeBatchBar"
+              title="完成并退出多选"
+            >
+              <i class="fa-solid fa-xmark"></i>
+            </button>
           </div>
         </div>
 
-        <!-- 批量操作图标栏 (全部为纯图标，适配手机端) -->
-        <div class="batch-actions-scroll">
+        <!-- 第二行：常驻按钮 + 右侧固定「更多 (⋯)」按钮 -->
+        <div class="batch-actions-bar-wrap">
+          <div class="batch-actions-scroll">
+            <button
+              v-for="act in pinnedBatchActions"
+              :key="act.id"
+              class="batch-action-item"
+              :class="{ danger: act.danger }"
+              :disabled="isBatchActionDisabled(act.id)"
+              @click="executeBatchAction(act.id)"
+              :title="act.title"
+            >
+              <span v-if="act.dotClass" class="batch-light-dot" :class="act.dotClass"></span>
+              <i v-else :class="act.icon"></i>
+            </button>
+          </div>
+
           <button
-            class="batch-action-item"
-            :disabled="!lorebookState.selectedUids.length"
-            @click="batchEnable"
-            title="批量启用"
+            class="batch-action-item batch-more-trigger"
+            :class="{ active: showBatchMoreMenu }"
+            @click="showBatchMoreMenu = !showBatchMoreMenu; if (!showBatchMoreMenu) isEditingBatchPins = false;"
+            title="更多批量操作与自定义"
           >
-            <i class="fa-solid fa-circle-check"></i>
-          </button>
-          <button
-            class="batch-action-item"
-            :disabled="!lorebookState.selectedUids.length"
-            @click="batchDisable"
-            title="批量停用"
-          >
-            <i class="fa-solid fa-ban"></i>
-          </button>
-          <button
-            class="batch-action-item"
-            :disabled="!lorebookState.selectedUids.length"
-            @click="showBatchGroupModal = true"
-            title="批量修改分组"
-          >
-            <i class="fa-solid fa-folder"></i>
-          </button>
-          <button
-            class="batch-action-item"
-            @click="batchExportJson"
-            title="导出 JSON"
-          >
-            <i class="fa-solid fa-file-export"></i>
-          </button>
-          <button
-            class="batch-action-item"
-            @click="showImportModal = true"
-            title="导入 JSON"
-          >
-            <i class="fa-solid fa-file-import"></i>
-          </button>
-          <button
-            class="batch-action-item danger"
-            :disabled="!lorebookState.selectedUids.length"
-            @click="showBatchDeleteModal = true"
-            title="批量删除"
-          >
-            <i class="fa-solid fa-trash-can"></i>
-          </button>
-          <button
-            class="batch-action-item btn-close-batch"
-            @click="lorebookState.isBatchMode = false"
-            title="完成并退出多选"
-          >
-            <i class="fa-solid fa-xmark"></i>
+            <i class="fa-solid fa-ellipsis"></i>
+            <span v-if="moreBatchActions.length > 0" class="more-count-badge">{{ moreBatchActions.length }}</span>
           </button>
         </div>
       </footer>
@@ -2083,6 +2716,535 @@ function onGroupTouchEnd() {
       </div>
     </div>
 
+    <!-- 内联弹窗：批量调整插入顺序 -->
+    <div v-if="showBatchOrderModal" class="modal-inline-mask" data-tt-mobile-surface="backdrop">
+      <div class="modal-box batch-order-modal-box" data-tt-mobile-surface="fullscreen-window">
+        <div class="modal-title-bar">
+          <div class="modal-title-lead">
+            <i class="fa-solid fa-arrow-down-1-9 text-accent"></i>
+            <span class="modal-title-text">世界书 · 批量调整顺序</span>
+          </div>
+          <button class="icon-btn-ghost" @click="showBatchOrderModal = false">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+
+        <div class="batch-order-body">
+          <!-- 作用范围切换 -->
+          <div class="modal-field-block">
+            <span class="modal-field-label">作用范围：</span>
+            <div class="batch-order-scope-tabs">
+              <button
+                type="button"
+                class="batch-order-scope-btn"
+                :class="{ active: batchOrderScope === 'selected' }"
+                :disabled="lorebookState.selectedUids.length === 0"
+                @click="setBatchOrderScope('selected')"
+              >
+                仅已勾选 ({{ lorebookState.selectedUids.length }})
+              </button>
+              <button
+                type="button"
+                class="batch-order-scope-btn"
+                :class="{ active: batchOrderScope === 'from_start' }"
+                @click="setBatchOrderScope('from_start')"
+              >
+                从起始点向后连续
+              </button>
+            </div>
+          </div>
+
+          <!-- 起始点选择 -->
+          <div class="modal-field-block">
+            <span class="modal-field-label">起始条目（此条之前的条目保持原顺序）：</span>
+            <div class="modal-select-row">
+              <i class="fa-solid fa-flag-checkered modal-sub-icon"></i>
+              <select
+                :value="batchOrderStartUid ?? ''"
+                @change="onBatchOrderStartChange"
+                class="modal-select-field"
+              >
+                <option
+                  v-for="(entry, idx) in batchOrderCandidateEntries"
+                  :key="entry.uid"
+                  :value="entry.uid"
+                >
+                  {{ idx + 1 }}. {{ entry.comment || '---' }} (#{{ entry.order ?? 100 }})
+                </option>
+              </select>
+            </div>
+          </div>
+
+          <!-- 起始顺序值与递增步长 -->
+          <div class="batch-order-inputs-row">
+            <div class="modal-field-block">
+              <span class="modal-field-label">起始顺序值：</span>
+              <div class="modal-input-row">
+                <i class="fa-solid fa-hashtag modal-sub-icon"></i>
+                <input
+                  v-model.number="batchOrderStartVal"
+                  type="number"
+                  class="modal-input"
+                  placeholder="例如: 100"
+                />
+              </div>
+            </div>
+
+            <div class="modal-field-block">
+              <span class="modal-field-label">每条递增步长：</span>
+              <div class="modal-input-row">
+                <i class="fa-solid fa-arrow-up-right-dots modal-sub-icon"></i>
+                <input
+                  v-model.number="batchOrderStep"
+                  type="number"
+                  class="modal-input"
+                  placeholder="例如: 1"
+                />
+              </div>
+            </div>
+          </div>
+
+          <!-- 快捷步长胶囊 -->
+          <div class="modal-group-chips">
+            <button
+              v-for="item in batchOrderQuickSteps"
+              :key="item.value"
+              type="button"
+              class="modal-group-chip"
+              :class="{ active: batchOrderStep === item.value }"
+              @click="batchOrderStep = item.value"
+            >
+              {{ item.label }}
+            </button>
+          </div>
+
+          <!-- 实时顺序调整预览 -->
+          <div class="modal-field-block">
+            <span class="modal-field-label">调整预览（共 {{ batchOrderPreviewList.length }} 条）：</span>
+            <div class="batch-order-preview-scroll">
+              <div
+                v-for="(item, idx) in batchOrderPreviewList"
+                :key="item.uid"
+                class="batch-order-preview-row"
+              >
+                <span class="preview-seq">{{ idx + 1 }}.</span>
+                <span class="preview-entry-title">{{ item.title }}</span>
+                <span class="preview-order-diff">
+                  <span class="preview-old-order">#{{ item.oldOrder }}</span>
+                  <i class="fa-solid fa-arrow-right preview-arrow"></i>
+                  <span class="preview-new-order" :class="{ changed: item.oldOrder !== item.newOrder }">#{{ item.newOrder }}</span>
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="modal-btns">
+          <button class="icon-btn" @click="showBatchOrderModal = false" title="取消">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+          <button
+            class="icon-btn btn-accent"
+            :disabled="batchOrderPreviewList.length === 0"
+            @click="handleExecuteBatchOrder"
+            title="应用顺序调整"
+          >
+            <i class="fa-solid fa-check"></i>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 内联弹窗：批量修改插入位置与深度 -->
+    <div v-if="showBatchPosModal" class="modal-inline-mask" data-tt-mobile-surface="backdrop">
+      <div class="modal-box batch-order-modal-box" data-tt-mobile-surface="fullscreen-window">
+        <div class="modal-title-bar">
+          <div class="modal-title-lead">
+            <i class="fa-solid fa-location-dot text-accent"></i>
+            <span class="modal-title-text">世界书 · 批量位置与深度</span>
+          </div>
+          <button class="icon-btn-ghost" @click="showBatchPosModal = false">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+
+        <div class="batch-order-body">
+          <div class="modal-field-block">
+            <span class="modal-field-label">目标插入位置（已选 {{ batchPosSelectedEntries.length }} 条）：</span>
+            <div class="modal-select-row">
+              <i class="fa-solid fa-location-dot modal-sub-icon"></i>
+              <select v-model="batchPosKey" class="modal-select-field">
+                <option
+                  v-for="opt in batchPositionOptions"
+                  :key="`${opt.pos}_${opt.role}`"
+                  :value="`${opt.pos}_${opt.role}`"
+                >
+                  {{ opt.label }}
+                </option>
+              </select>
+            </div>
+          </div>
+
+          <!-- 深度配置（仅当目标位置为 D系统 / D用户 / Dai 时显示） -->
+          <template v-if="batchPosIsDepthMode">
+            <div class="modal-field-block">
+              <span class="modal-field-label">深度设置方式：</span>
+              <div class="batch-order-scope-tabs">
+                <button
+                  type="button"
+                  class="batch-order-scope-btn"
+                  :class="{ active: batchDepthMode === 'fixed' }"
+                  @click="batchDepthMode = 'fixed'"
+                >
+                  统一深度
+                </button>
+                <button
+                  type="button"
+                  class="batch-order-scope-btn"
+                  :class="{ active: batchDepthMode === 'increment' }"
+                  @click="batchDepthMode = 'increment'"
+                >
+                  递增深度
+                </button>
+                <button
+                  type="button"
+                  class="batch-order-scope-btn"
+                  :class="{ active: batchDepthMode === 'keep' }"
+                  @click="batchDepthMode = 'keep'"
+                >
+                  保持原深度
+                </button>
+              </div>
+            </div>
+
+            <div v-if="batchDepthMode === 'fixed'" class="modal-field-block">
+              <span class="modal-field-label">统一深度值 (0-100)：</span>
+              <div class="modal-input-row">
+                <i class="fa-solid fa-layer-group modal-sub-icon"></i>
+                <input
+                  v-model.number="batchDepthStart"
+                  type="number"
+                  min="0"
+                  max="100"
+                  class="modal-input"
+                  placeholder="默认 4"
+                />
+              </div>
+            </div>
+
+            <div v-else-if="batchDepthMode === 'increment'" class="batch-order-inputs-row">
+              <div class="modal-field-block">
+                <span class="modal-field-label">起始深度：</span>
+                <div class="modal-input-row">
+                  <i class="fa-solid fa-layer-group modal-sub-icon"></i>
+                  <input
+                    v-model.number="batchDepthStart"
+                    type="number"
+                    min="0"
+                    max="100"
+                    class="modal-input"
+                  />
+                </div>
+              </div>
+              <div class="modal-field-block">
+                <span class="modal-field-label">每条步长：</span>
+                <div class="modal-input-row">
+                  <i class="fa-solid fa-arrow-up-right-dots modal-sub-icon"></i>
+                  <input
+                    v-model.number="batchDepthStep"
+                    type="number"
+                    class="modal-input"
+                  />
+                </div>
+              </div>
+            </div>
+          </template>
+
+          <!-- 调整预览 -->
+          <div class="modal-field-block">
+            <span class="modal-field-label">修改预览（共 {{ batchPosPreviewList.length }} 条）：</span>
+            <div class="batch-order-preview-scroll">
+              <div
+                v-for="(item, idx) in batchPosPreviewList"
+                :key="item.uid"
+                class="batch-order-preview-row"
+              >
+                <span class="preview-seq">{{ idx + 1 }}.</span>
+                <span class="preview-entry-title">{{ item.title }}</span>
+                <span class="preview-order-diff">
+                  <span class="preview-old-order">{{ item.oldLabel }}</span>
+                  <i class="fa-solid fa-arrow-right preview-arrow"></i>
+                  <span class="preview-new-order" :class="{ changed: item.changed }">{{ item.newLabel }}</span>
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="modal-btns">
+          <button class="icon-btn" @click="showBatchPosModal = false" title="取消">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+          <button
+            class="icon-btn btn-accent"
+            :disabled="batchPosPreviewList.length === 0"
+            @click="handleExecuteBatchPos"
+            title="应用位置与深度调整"
+          >
+            <i class="fa-solid fa-check"></i>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 内联弹窗：跨世界书批量复制 / 移动条目 -->
+    <div v-if="showBatchTransferModal" class="modal-inline-mask" data-tt-mobile-surface="backdrop">
+      <div class="modal-box batch-order-modal-box" data-tt-mobile-surface="fullscreen-window">
+        <div class="modal-title-bar">
+          <div class="modal-title-lead">
+            <i class="fa-solid fa-share-from-square text-accent"></i>
+            <span class="modal-title-text">世界书 · 跨书复制 / 移动</span>
+          </div>
+          <button class="icon-btn-ghost" @click="showBatchTransferModal = false">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+
+        <div class="batch-order-body">
+          <div class="modal-field-block">
+            <span class="modal-field-label">操作方式（已选 {{ lorebookState.selectedUids.length }} 条）：</span>
+            <div class="batch-order-scope-tabs">
+              <button
+                type="button"
+                class="batch-order-scope-btn"
+                :class="{ active: batchTransferMode === 'copy' }"
+                @click="batchTransferMode = 'copy'"
+              >
+                复制到目标书
+              </button>
+              <button
+                type="button"
+                class="batch-order-scope-btn"
+                :class="{ active: batchTransferMode === 'move' }"
+                @click="batchTransferMode = 'move'"
+              >
+                移动到目标书
+              </button>
+            </div>
+          </div>
+
+          <div class="modal-field-block">
+            <span class="modal-field-label">目标世界书：</span>
+            <div class="modal-select-row">
+              <i class="fa-solid fa-book-bookmark modal-sub-icon"></i>
+              <select v-model="batchTransferTargetBook" class="modal-select-field">
+                <option
+                  v-for="b in availableTransferTargetBooks"
+                  :key="b"
+                  :value="b"
+                >
+                  {{ b }}
+                </option>
+              </select>
+            </div>
+          </div>
+
+          <div class="modal-field-block">
+            <span class="modal-field-label">目标分组处理：</span>
+            <div class="batch-order-scope-tabs">
+              <button
+                type="button"
+                class="batch-order-scope-btn"
+                :class="{ active: batchTransferGroupMode === 'keep' }"
+                @click="batchTransferGroupMode = 'keep'"
+              >
+                保留原分组
+              </button>
+              <button
+                type="button"
+                class="batch-order-scope-btn"
+                :class="{ active: batchTransferGroupMode === 'custom' }"
+                @click="batchTransferGroupMode = 'custom'"
+              >
+                指定分组
+              </button>
+            </div>
+          </div>
+
+          <div v-if="batchTransferGroupMode === 'custom'" class="modal-field-block">
+            <span class="modal-field-label">目标分组名称（留空则为未分组）：</span>
+            <div class="modal-input-row">
+              <i class="fa-solid fa-folder modal-sub-icon"></i>
+              <input
+                v-model="batchTransferCustomGroup"
+                type="text"
+                class="modal-input"
+                placeholder="输入目标分组名..."
+              />
+            </div>
+          </div>
+
+          <p class="modal-confirm-msg" v-if="batchTransferMode === 'move'">
+            注意：「移动」会从当前世界书《{{ lorebookState.currentBook }}》中移除已选条目并写入目标书（支持在历史日志中撤回）。
+          </p>
+        </div>
+
+        <div class="modal-btns">
+          <button class="icon-btn" @click="showBatchTransferModal = false" title="取消">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+          <button
+            class="icon-btn btn-accent"
+            :disabled="!batchTransferTargetBook || isBatchTransferring"
+            @click="handleExecuteBatchTransfer"
+            title="确认执行"
+          >
+            <i class="fa-solid" :class="isBatchTransferring ? 'fa-spinner fa-spin' : 'fa-check'"></i>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 内联弹窗：整本世界书全局查找与批量替换 -->
+    <div v-if="showGlobalReplaceModal" class="modal-inline-mask" data-tt-mobile-surface="backdrop">
+      <div class="modal-box batch-order-modal-box" data-tt-mobile-surface="fullscreen-window">
+        <div class="modal-title-bar">
+          <div class="modal-title-lead">
+            <i class="fa-solid fa-repeat text-accent"></i>
+            <span class="modal-title-text">世界书 · 全局查找与替换</span>
+          </div>
+          <button class="icon-btn-ghost" @click="showGlobalReplaceModal = false">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+
+        <div class="batch-order-body">
+          <div class="modal-field-block">
+            <span class="modal-field-label">查找范围：</span>
+            <div class="batch-order-scope-tabs">
+              <button
+                type="button"
+                class="batch-order-scope-btn"
+                :class="{ active: globalReplaceScope === 'all' }"
+                @click="globalReplaceScope = 'all'"
+              >
+                整本世界书
+              </button>
+              <button
+                type="button"
+                class="batch-order-scope-btn"
+                :class="{ active: globalReplaceScope === 'selected' }"
+                :disabled="lorebookState.selectedUids.length === 0"
+                @click="globalReplaceScope = 'selected'"
+              >
+                仅已勾选 ({{ lorebookState.selectedUids.length }})
+              </button>
+            </div>
+          </div>
+
+          <div class="modal-field-block">
+            <span class="modal-field-label">查找文本：</span>
+            <div class="modal-input-row">
+              <i class="fa-solid fa-magnifying-glass modal-sub-icon"></i>
+              <input
+                v-model="globalSearchText"
+                type="text"
+                class="modal-input"
+                placeholder="输入要查找的词或片段..."
+                autofocus
+              />
+            </div>
+          </div>
+
+          <div class="modal-field-block">
+            <span class="modal-field-label">替换为：</span>
+            <div class="modal-input-row">
+              <i class="fa-solid fa-arrow-right-arrow-left modal-sub-icon"></i>
+              <input
+                v-model="globalReplaceText"
+                type="text"
+                class="modal-input"
+                placeholder="输入替换内容 (留空表示删除匹配文本)..."
+              />
+            </div>
+          </div>
+
+          <div class="modal-field-block">
+            <span class="modal-field-label">目标字段与选项：</span>
+            <div class="modal-group-chips">
+              <button
+                type="button"
+                class="modal-group-chip"
+                :class="{ active: globalReplaceInComment }"
+                @click="globalReplaceInComment = !globalReplaceInComment"
+              >
+                标题
+              </button>
+              <button
+                type="button"
+                class="modal-group-chip"
+                :class="{ active: globalReplaceInKeys }"
+                @click="globalReplaceInKeys = !globalReplaceInKeys"
+              >
+                触发词
+              </button>
+              <button
+                type="button"
+                class="modal-group-chip"
+                :class="{ active: globalReplaceInContent }"
+                @click="globalReplaceInContent = !globalReplaceInContent"
+              >
+                正文
+              </button>
+              <button
+                type="button"
+                class="modal-group-chip"
+                :class="{ active: globalReplaceCaseSensitive }"
+                @click="globalReplaceCaseSensitive = !globalReplaceCaseSensitive"
+              >
+                区分大小写
+              </button>
+            </div>
+          </div>
+
+          <div class="modal-field-block" v-if="globalSearchText">
+            <span class="modal-field-label">
+              命中 {{ globalReplacePreview.totalEntriesMatched }} 个条目，共 {{ globalReplacePreview.totalHits }} 处匹配：
+            </span>
+            <div v-if="globalReplacePreview.items.length > 0" class="batch-order-preview-scroll">
+              <div
+                v-for="(item, idx) in globalReplacePreview.items"
+                :key="item.uid"
+                class="batch-order-preview-row"
+              >
+                <span class="preview-seq">{{ idx + 1 }}.</span>
+                <span class="preview-entry-title">{{ item.title }}</span>
+                <span class="preview-match-meta">
+                  <span class="preview-fields-tag">{{ item.fields.join('/') }}</span>
+                  <span class="preview-hits-count">{{ item.hits }}处</span>
+                </span>
+              </div>
+            </div>
+            <div v-else class="replace-empty-hint">未匹配到任何条目</div>
+          </div>
+        </div>
+
+        <div class="modal-btns">
+          <button class="icon-btn" @click="showGlobalReplaceModal = false" title="取消">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+          <button
+            class="icon-btn btn-accent"
+            :disabled="!globalSearchText || globalReplacePreview.totalHits === 0"
+            @click="handleExecuteGlobalReplace"
+            title="全部替换"
+          >
+            <i class="fa-solid fa-check"></i>
+          </button>
+        </div>
+      </div>
+    </div>
+
     <!-- 内联弹窗：确认删除单条词条 -->
     <div v-if="entryToDelete !== null" class="modal-inline-mask" data-tt-mobile-surface="backdrop">
       <div class="modal-box" data-tt-mobile-surface="fullscreen-window">
@@ -2420,7 +3582,7 @@ function onGroupTouchEnd() {
   width: 100%;
   height: 36px;
   padding-left: 30px;
-  padding-right: 26px;
+  padding-right: 52px;
   border: 1px solid var(--myext-line);
   border-radius: var(--myext-radius-sm);
   background: var(--myext-surface-2);
@@ -2433,15 +3595,30 @@ function onGroupTouchEnd() {
   border-color: var(--myext-accent);
 }
 
-.clear-search-btn {
+.search-right-tools {
   position: absolute;
   right: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.search-inline-btn {
   background: none;
   border: none;
   color: var(--myext-ink-muted);
   cursor: pointer;
   padding: 4px;
   font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+}
+
+.search-inline-btn:hover,
+.search-inline-btn:active {
+  color: var(--myext-accent);
 }
 
 .sort-wrapper,
@@ -2756,6 +3933,24 @@ function onGroupTouchEnd() {
   border: 1px solid rgba(147, 130, 158, 0.28);
 }
 
+.tag-depth-sys {
+  background: rgba(107, 140, 168, 0.15);
+  color: #82a7c4;
+  border: 1px solid rgba(107, 140, 168, 0.3);
+}
+
+.tag-depth-user {
+  background: rgba(110, 150, 129, 0.15);
+  color: #83b499;
+  border: 1px solid rgba(110, 150, 129, 0.3);
+}
+
+.tag-depth-ai {
+  background: rgba(164, 130, 178, 0.16);
+  color: #be9dce;
+  border: 1px solid rgba(164, 130, 178, 0.32);
+}
+
 .tag-pos {
   background: rgba(184, 156, 118, 0.15);
   color: #cbaf88;
@@ -2784,6 +3979,17 @@ function onGroupTouchEnd() {
   font-size: 11px;
   color: var(--myext-ink-muted);
   font-family: var(--myext-font-mono);
+}
+
+.badge-token {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--myext-surface-2);
+  border: 1px solid var(--myext-line);
+  color: var(--myext-ink-muted);
+  font-family: var(--myext-font-mono);
+  white-space: nowrap;
 }
 
 .card-keywords {
@@ -3149,6 +4355,47 @@ function onGroupTouchEnd() {
   color: var(--myext-ink-muted);
 }
 
+.metric-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.metric-mode-pills {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  background: var(--myext-surface-2);
+  border: 1px solid var(--myext-line);
+  border-radius: 4px;
+  padding: 1px;
+}
+
+.metric-mode-pill {
+  border: none;
+  background: transparent;
+  color: var(--myext-ink-muted);
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  cursor: pointer;
+  line-height: 1.3;
+}
+
+.metric-mode-pill.active {
+  background: var(--myext-accent);
+  color: var(--myext-accent-ink);
+  font-weight: 600;
+}
+
+.metric-sub-hint {
+  font-size: 10px;
+  color: var(--myext-ink-muted);
+  font-family: var(--myext-font-mono);
+  margin-top: 1px;
+}
+
 .metric-value {
   display: flex;
   align-items: baseline;
@@ -3395,6 +4642,14 @@ function onGroupTouchEnd() {
   border-color: var(--myext-accent);
 }
 
+.batch-light-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
 /* 状态空箱 */
 .state-icon-box {
   display: flex;
@@ -3464,6 +4719,7 @@ function onGroupTouchEnd() {
   padding: 14px;
   width: 100%;
   max-width: 340px;
+  box-sizing: border-box;
   box-shadow: var(--myext-shadow);
   display: flex;
   flex-direction: column;
@@ -3605,6 +4861,10 @@ function onGroupTouchEnd() {
   display: flex;
   align-items: center;
   gap: 10px;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  overflow: hidden;
   background: var(--myext-surface-2);
   border: 1px solid var(--myext-line);
   border-radius: var(--myext-radius-sm);
@@ -3618,6 +4878,10 @@ function onGroupTouchEnd() {
 }
 
 .modal-input-row .modal-input {
+  width: 100%;
+  min-width: 0;
+  flex: 1 1 0%;
+  box-sizing: border-box;
   border: none;
   background: transparent;
   padding: 0;
@@ -3743,6 +5007,7 @@ function onGroupTouchEnd() {
   flex-direction: column;
   gap: 6px;
   width: 100%;
+  min-width: 0;
   box-sizing: border-box;
 }
 
@@ -4366,5 +5631,328 @@ function onGroupTouchEnd() {
 
 .group-section-card.group-drop-after {
   box-shadow: 0 2px 0 0 var(--myext-accent);
+}
+
+/* ================= 批量调整顺序弹窗样式 ================= */
+.batch-order-modal-box {
+  max-width: 400px;
+}
+
+.batch-order-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.batch-order-scope-tabs {
+  display: flex;
+  gap: 6px;
+}
+
+.batch-order-scope-btn {
+  flex: 1;
+  height: 32px;
+  border: 1px solid var(--myext-line);
+  border-radius: var(--myext-radius-sm);
+  background: var(--myext-surface-2);
+  color: var(--myext-ink-soft);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.batch-order-scope-btn.active {
+  background: var(--myext-accent);
+  color: var(--myext-accent-ink);
+  border-color: var(--myext-accent);
+  font-weight: 600;
+}
+
+.batch-order-scope-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.batch-order-inputs-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.batch-order-preview-scroll {
+  max-height: 170px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+  border-radius: var(--myext-radius-sm);
+  background: var(--myext-surface-2);
+  border: 1px solid var(--myext-line);
+}
+
+.batch-order-preview-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  padding: 2px 0;
+}
+
+.preview-seq {
+  color: var(--myext-ink-muted);
+  font-family: var(--myext-font-mono);
+  flex-shrink: 0;
+}
+
+.preview-entry-title {
+  flex: 1;
+  min-width: 0;
+  color: var(--myext-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-order-diff {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--myext-font-mono);
+  flex-shrink: 0;
+}
+
+.preview-old-order {
+  color: var(--myext-ink-muted);
+}
+
+.preview-arrow {
+  font-size: 9px;
+  color: var(--myext-ink-muted);
+}
+
+.preview-new-order {
+  color: var(--myext-ink-soft);
+  font-weight: 600;
+}
+
+.preview-new-order.changed {
+  color: var(--myext-accent);
+}
+
+.group-batch-check-btn {
+  margin-right: 2px;
+}
+
+.preview-match-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.preview-fields-tag {
+  font-size: 10px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--myext-surface);
+  border: 1px solid var(--myext-line);
+  color: var(--myext-ink-soft);
+}
+
+.preview-hits-count {
+  font-family: var(--myext-font-mono);
+  color: var(--myext-accent);
+  font-weight: 600;
+}
+
+.replace-empty-hint {
+  padding: 10px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--myext-ink-muted);
+  background: var(--myext-surface-2);
+  border-radius: var(--myext-radius-sm);
+  border: 1px solid var(--myext-line);
+}
+
+/* ================= 批量底栏固定退出 + 更多宫格抽屉 ================= */
+.batch-tool-btn.btn-exit-batch {
+  background: var(--myext-accent);
+  color: var(--myext-accent-ink);
+  border-color: var(--myext-accent);
+}
+
+.batch-actions-bar-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.batch-actions-bar-wrap .batch-actions-scroll {
+  flex: 1 1 0%;
+  min-width: 0;
+}
+
+.batch-more-trigger {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.batch-more-trigger.active {
+  background: var(--myext-accent);
+  color: var(--myext-accent-ink);
+  border-color: var(--myext-accent);
+}
+
+.more-count-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: 8px;
+  background: var(--myext-accent);
+  color: var(--myext-accent-ink);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 15px;
+  text-align: center;
+  font-family: var(--myext-font-mono);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+
+.batch-more-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 98;
+  background: transparent;
+}
+
+.batch-more-popover {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  right: 12px;
+  left: 12px;
+  max-width: 380px;
+  margin-left: auto;
+  background: var(--myext-surface);
+  border: 1px solid var(--myext-line-strong);
+  border-radius: var(--myext-radius);
+  box-shadow: 0 -6px 24px rgba(0, 0, 0, 0.24);
+  padding: 10px 12px 12px;
+  z-index: 110;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.batch-more-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px solid var(--myext-line);
+  padding-bottom: 6px;
+}
+
+.batch-more-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--myext-ink);
+}
+
+.batch-more-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn-pin-done {
+  background: var(--myext-accent);
+  color: var(--myext-accent-ink);
+  border-color: var(--myext-accent);
+  font-weight: 600;
+}
+
+.batch-pin-tip {
+  margin: 0;
+  font-size: 11px;
+  color: var(--myext-ink-muted);
+}
+
+.batch-more-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.batch-more-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 9px 4px;
+  border: 1px solid var(--myext-line);
+  border-radius: var(--myext-radius-sm);
+  background: var(--myext-surface-2);
+  color: var(--myext-ink);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.batch-more-cell:active:not(:disabled) {
+  transform: scale(0.95);
+  border-color: var(--myext-accent);
+}
+
+.batch-more-cell:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.batch-more-cell.danger:not(:disabled) {
+  color: #fa5252;
+  border-color: rgba(250, 82, 82, 0.35);
+}
+
+.batch-more-cell.pinned {
+  background: var(--myext-accent);
+  color: var(--myext-accent-ink);
+  border-color: var(--myext-accent);
+}
+
+.batch-more-cell.pinned .batch-light-dot {
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.55);
+}
+
+.batch-more-cell-label {
+  font-size: 11px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.batch-more-empty {
+  padding: 12px 8px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--myext-ink-muted);
+}
+
+.more-pop-enter-active,
+.more-pop-leave-active {
+  transition: transform 0.18s ease, opacity 0.18s ease;
+}
+
+.more-pop-enter-from,
+.more-pop-leave-to {
+  transform: translateY(8px) scale(0.97);
+  opacity: 0;
 }
 </style>
