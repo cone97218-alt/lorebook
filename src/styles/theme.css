@@ -251,26 +251,52 @@
   --myext-shadow: 0 18px 48px -8px rgba(0, 0, 0, 0.65);
 }
 
-/* ================= 12. 跟随 ST 宿主主题 (深度混色算法) =================
-   严格从 SillyTavern 宿主主题的 --SmartTheme* 变量派生：
-   1. 背景取 --SmartThemeBlurTintColor，卡片取 --SmartThemeChatTintColor；
-   2. 次级面通过 color-mix 混入文字主色，优雅拉开输入框/次级卡片层次；
-   3. 软化文字使用 body↔bg 深度色彩退让，比原生 EmColor 更清晰稳定；
-   4. 强调色优先取 --SmartThemeQuoteColor 与 --SmartThemeHighlightColor；
-   5. 边框直接承接 --SmartThemeBorderColor，遮罩采用稳定中性深色。 */
+/* ================= 12. 跟随 ST 宿主主题 (智能去透明保底 + 深度混色) =================
+   优先采用 themeSync.ts 动态解析的实心安全变量 --myext-st-*；
+   纯 CSS 兜底使用 rgb(from ... r g b) 强制剥离宿主透明度，防止聊天背景为 0 时面板透明穿模。 */
 .myext-root[data-theme='st'] {
-  --myext-bg: var(--SmartThemeBlurTintColor, #f6f5f2);
-  --myext-surface: var(--SmartThemeChatTintColor, #ffffff);
-  --myext-surface-2: color-mix(in srgb, var(--SmartThemeChatTintColor, #ffffff) 92%, var(--SmartThemeBodyColor, #000000));
-  --myext-ink: var(--SmartThemeBodyColor, #14213d);
-  --myext-ink-soft: color-mix(in srgb, var(--SmartThemeBodyColor, #14213d) 72%, var(--SmartThemeBlurTintColor, #f6f5f2));
-  --myext-ink-muted: color-mix(in srgb, var(--SmartThemeBodyColor, #14213d) 52%, var(--SmartThemeBlurTintColor, #f6f5f2));
-  --myext-accent: var(--SmartThemeQuoteColor, var(--SmartThemeHighlightColor, #718cc1));
-  --myext-accent-soft: color-mix(in srgb, var(--SmartThemeQuoteColor, #718cc1) 14%, transparent);
-  --myext-accent-ink: var(--SmartThemeBlurTintColor, #ffffff);
-  --myext-line: var(--SmartThemeBorderColor, #cfbcbc);
-  --myext-line-strong: color-mix(in srgb, var(--SmartThemeBorderColor, #cfbcbc) 70%, var(--SmartThemeBodyColor, #000000));
+  --myext-bg: var(--myext-st-bg, rgb(from var(--SmartThemeBlurTintColor, #f6f5f2) r g b));
+  --myext-surface: var(--myext-st-surface, rgb(from var(--SmartThemeChatTintColor, #ffffff) r g b));
+  --myext-surface-2: var(
+    --myext-st-surface-2,
+    color-mix(
+      in srgb,
+      rgb(from var(--SmartThemeChatTintColor, #ffffff) r g b) 92%,
+      rgb(from var(--SmartThemeBodyColor, #000000) r g b)
+    )
+  );
+  --myext-ink: var(--myext-st-ink, rgb(from var(--SmartThemeBodyColor, #14213d) r g b));
+  --myext-ink-soft: var(
+    --myext-st-ink-soft,
+    color-mix(
+      in srgb,
+      rgb(from var(--SmartThemeBodyColor, #14213d) r g b) 72%,
+      rgb(from var(--SmartThemeBlurTintColor, #f6f5f2) r g b)
+    )
+  );
+  --myext-ink-muted: var(
+    --myext-st-ink-muted,
+    color-mix(
+      in srgb,
+      rgb(from var(--SmartThemeBodyColor, #14213d) r g b) 52%,
+      rgb(from var(--SmartThemeBlurTintColor, #f6f5f2) r g b)
+    )
+  );
+  --myext-accent: var(--myext-st-accent, rgb(from var(--SmartThemeQuoteColor, var(--SmartThemeHighlightColor, #718cc1)) r g b));
+  --myext-accent-soft: var(
+    --myext-st-accent-soft,
+    color-mix(in srgb, var(--SmartThemeQuoteColor, #718cc1) 14%, transparent)
+  );
+  --myext-accent-ink: var(--myext-st-accent-ink, #ffffff);
+  --myext-line: var(--myext-st-line, var(--SmartThemeBorderColor, #cfbcbc));
+  --myext-line-strong: var(
+    --myext-st-line-strong,
+    color-mix(in srgb, var(--SmartThemeBorderColor, #cfbcbc) 70%, var(--SmartThemeBodyColor, #000000))
+  );
   --myext-overlay: #00000073;
-  --myext-shadow: 0 18px 48px -20px var(--SmartThemeShadowColor, #00000038),
-    0 4px 12px -6px var(--SmartThemeShadowColor, #0000001a);
+  --myext-shadow: var(
+    --myext-st-shadow,
+    0 18px 48px -20px var(--SmartThemeShadowColor, #00000038),
+    0 4px 12px -6px var(--SmartThemeShadowColor, #0000001a)
+  );
 }

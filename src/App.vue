@@ -1,8 +1,38 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { closeApp, lastOpenedAt, modalHost, ui } from '@/state/ui';
 import { getPage, PAGES } from '@/pages/registry';
+import { resolveStThemeVars } from '@/st/themeSync';
 import FloatingOrb from '@/components/FloatingOrb.vue';
+
+const stThemeStyle = ref<Record<string, string>>({});
+let themeObserver: MutationObserver | null = null;
+let themeSyncTimer: ReturnType<typeof setTimeout> | null = null;
+
+function syncStTheme() {
+  if (ui.theme === 'st') {
+    stThemeStyle.value = resolveStThemeVars();
+  } else {
+    stThemeStyle.value = {};
+  }
+}
+
+function scheduleSyncStTheme() {
+  if (ui.theme !== 'st') return;
+  if (themeSyncTimer) return;
+  themeSyncTimer = setTimeout(() => {
+    themeSyncTimer = null;
+    syncStTheme();
+  }, 60);
+}
+
+watch(
+  () => [ui.theme, ui.open],
+  () => {
+    syncStTheme();
+  },
+  { immediate: true },
+);
 
 const isNarrow = window.matchMedia('(max-width: 640px)');
 const narrowFlag = ref(isNarrow.matches);
@@ -11,6 +41,22 @@ let unsubscribeLayout: (() => void | Promise<void>) | null = null;
 
 onMounted(async () => {
   isNarrow.addEventListener('change', onMq);
+  syncStTheme();
+  if (typeof MutationObserver !== 'undefined') {
+    themeObserver = new MutationObserver(() => {
+      scheduleSyncStTheme();
+    });
+    themeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['style', 'class'],
+    });
+    if (document.body) {
+      themeObserver.observe(document.body, {
+        attributes: true,
+        attributeFilter: ['style', 'class'],
+      });
+    }
+  }
   try {
     const tt = (window as any).__TAURITAVERN__;
     const hostReady = tt?.ready ?? (window as any).__TAURITAVERN_MAIN_READY__;
@@ -28,6 +74,14 @@ onMounted(async () => {
 
 onUnmounted(async () => {
   isNarrow.removeEventListener('change', onMq);
+  if (themeObserver) {
+    themeObserver.disconnect();
+    themeObserver = null;
+  }
+  if (themeSyncTimer) {
+    clearTimeout(themeSyncTimer);
+    themeSyncTimer = null;
+  }
   if (unsubscribeLayout) {
     try {
       await unsubscribeLayout();
@@ -96,7 +150,11 @@ const windowStyle = computed(() => {
 </script>
 
 <template>
-  <div class="myext-root" :data-theme="ui.theme">
+  <div
+    class="myext-root"
+    :data-theme="ui.theme"
+    :style="ui.theme === 'st' ? stThemeStyle : undefined"
+  >
     <!-- 弹窗 Teleport 挂载容器 -->
     <div ref="modalHost"></div>
 
